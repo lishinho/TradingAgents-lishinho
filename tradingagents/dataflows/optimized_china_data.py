@@ -22,6 +22,14 @@ logger = get_logger('agents')
 # 导入 MongoDB 缓存适配器
 from .cache.mongodb_cache_adapter import get_mongodb_cache_adapter, get_stock_data_with_fallback, get_financial_data_with_fallback
 
+# 导入数据质量验证和量化评分模块
+from tradingagents.dataflows.data_validator import (
+    annotate_fundamentals_with_validation,
+    validate_pe,
+    detect_industry,
+)
+from tradingagents.quantitative_scoring import compute_quantitative_score
+
 
 class OptimizedChinaDataProvider:
     """优化的A股数据提供器 - 集成缓存和Tushare数据接口"""
@@ -668,15 +676,156 @@ class OptimizedChinaDataProvider:
 - **仓位建议**：根据风险承受能力合理配置仓位
 - **关注指标**：重点关注ROE、PE、现金流等核心指标
 
----
+|---
 **重要声明**: 本报告基于公开数据和模型估算生成，仅供参考，不构成投资建议。
 实际投资决策请结合最新财报数据和专业分析师意见。
 
 **数据来源**: {data_source if data_source else "多源数据"}数据接口 + 基本面分析模型
 **生成时间**: {datetime.now(ZoneInfo(get_timezone_name())).strftime('%Y-%m-%d %H:%M:%S')}
+
+---
+
+## 🔍 数据质量验证 & 量化评分（辅助参考）
+
+{self._append_data_validation_and_scoring(symbol, company_name, financial_estimates, industry_info)}
 """
 
         return report
+
+    def _append_data_validation_and_scoring(
+        self,
+        symbol: str,
+        company_name: str,
+        financial_estimates: dict,
+        industry_info: dict,
+    ) -> str:
+        """
+        在基本面报告末尾附加数据质量验证和量化评分。
+        帮助下游LLM判断数据可靠性，并提供一致的量化基准。
+
+        Returns:
+            str: 格式化的验证和评分文本
+        """
+        try:
+            from tradingagents.dataflows.data_validator import (
+                annotate_fundamentals_with_validation as _annotate,
+                validate_pe as _val_pe,
+                detect_industry as _detect_ind,
+            )
+            from tradingagents.quantitative_scoring import (
+                compute_quantitative_score as _score,
+            )
+
+            lines = []
+
+            # ---- 1. 数据质量验证 ----
+            pe_raw = financial_estimates.get("pe", financial_estimates.get("pe_ttm"))
+            pb_raw = financial_estimates.get("pb")
+            sector = industry_info.get("industry", "")
+
+            annotations = _annotate(
+                {"pe": pe_raw, "pb": pb_raw},
+                company_name,
+                sector,
+                symbol,
+            )
+
+            pe_check = annotations.get("pe_validation", {})
+            if pe_check.get("severity") in ("warning", "error"):
+                lines.append(f"⚠️ **数据质量提示**: {pe_check.get('message', '')}")
+                hint = annotations.get("pe_annual_hint")
+                if hint:
+                    lines.append(f"   {hint}")
+                ind_range = pe_check.get("industry_pe_range")
+                if ind_range:
+                    lines.append(
+                        f"   ℹ️ 行业{_detect_ind(company_name, sector)}合理PE范围: "
+                        f"[{ind_range[0]}, {ind_range[1]}]"
+                    )
+
+            pb_check = annotations.get("pb_validation", {})
+            if pb_check.get("severity") in ("warning", "error"):
+                lines.append(f"⚠️ **数据质量提示**: {pb_check.get('message', '')}")
+
+            if not lines:
+                lines.append("✅ 数据质量检查通过，未发现异常。")
+
+            # ---- 2. 量化评分 ----
+            def _sf(v):
+                """安全的浮点数转换"""
+                if v is None or v == "N/A":
+                    return None
+                try:
+                    return float(v)
+                except (ValueError, TypeError):
+                    return None
+
+            pe = _sf(pe_raw)
+            pb = _sf(pb_raw)
+            roe = _sf(financial_estimates.get("roe"))
+            gross_margin = _sf(financial_estimates.get("gross_margin"))
+            debt_ratio = _sf(financial_estimates.get("debt_ratio"))
+
+            score_result = _score(
+                fundamentals={
+                    "pe": pe,
+                    "pb": pb,
+                    "roe": roe,
+                    "gross_margin": gross_margin,
+                    "debt_ratio": debt_ratio,
+                },
+                technical={},  # 技术数据在market_report中，此处仅给基本面分
+                company_name=company_name,
+                sector=sector,
+            )
+
+            lines.append("")
+            lines.append("### 📊 量化评分总计（0-100）")
+            lines.append(f"| 维度 | 得分 | 说明 |")
+            lines.append(f"|------|:---:|------|")
+            lines.append(
+                f"| **总分** | **{score_result['total_score']}** | "
+                f"建议: {score_result['suggested_action']} |"
+            )
+            score_detail = score_result.get("detail", {})
+
+            pe_detail = score_detail.get("pe", {})
+            lines.append(
+                f"| PE估值 | {pe_detail.get('score', 'N/A')} | "
+                f"{pe_detail.get('note', '')} |"
+            )
+            pb_detail = score_detail.get("pb", {})
+            lines.append(
+                f"| PB估值 | {pb_detail.get('score', 'N/A')} | "
+                f"{pb_detail.get('note', '')} |"
+            )
+            roe_detail = score_detail.get("roe", {})
+            lines.append(
+                f"| ROE质量 | {roe_detail.get('score', 'N/A')} | "
+                f"{roe_detail.get('note', '')} |"
+            )
+            debt_detail = score_detail.get("debt_ratio", {})
+            lines.append(
+                f"| 负债风险 | {debt_detail.get('score', 'N/A')} | "
+                f"{debt_detail.get('note', '')} |"
+            )
+
+            macro_info = score_detail.get("macro", {})
+            lines.append(
+                f"| 行业属性 | {macro_info.get('score', 'N/A')} | "
+                f"{macro_info.get('note', '')} |"
+            )
+
+            lines.append("")
+            lines.append(
+                "> ⚠️ 量化评分为辅助参考，最终决策请结合辩论和实际市场状况。"
+            )
+
+            return "\n".join(lines)
+
+        except Exception as e:
+            logger.warning(f"⚠️ 数据验证/评分生成失败（不影响主报告）: {e}")
+            return "数据质量验证暂不可用。"
 
     def _get_industry_info(self, symbol: str) -> dict:
         """根据股票代码获取行业信息（优先使用数据库真实数据）"""

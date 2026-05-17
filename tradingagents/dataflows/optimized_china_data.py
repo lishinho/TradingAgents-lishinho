@@ -743,15 +743,6 @@ class OptimizedChinaDataProvider:
                         f"[{ind_range[0]}, {ind_range[1]}]"
                     )
 
-            # 如果AKShare提供了年度EPS交叉验证结果，引用它
-            pe_annual = financial_estimates.get("pe_annual_eps")
-            if pe_annual is not None:
-                pe_original = financial_estimates.get("pe", financial_estimates.get("pe_ttm", ""))
-                lines.append(
-                    f"📌 **年度EPS交叉验证**: 按多期EPS合计估算PE≈{pe_annual:.1f}倍, "
-                    f"与TTM PE({pe_original})偏差较大, 建议参考年报核实"
-                )
-
             pb_check = annotations.get("pb_validation", {})
             if pb_check.get("severity") in ("warning", "error"):
                 lines.append(f"⚠️ **数据质量提示**: {pb_check.get('message', '')}")
@@ -1601,38 +1592,6 @@ class OptimizedChinaDataProvider:
                                 realtime_tag = " (实时)" if is_realtime else ""
                                 metrics["pb"] = f"{pb_value:.2f}倍{realtime_tag}"
                                 logger.info(f"✅ [AKShare-PB计算-第1层成功] PB={pb_value:.2f}倍")
-                            # ✅ 交叉验证：用AKShare年度EPS校验TTM PE是否失真
-                            if pe_value is not None and pe_value > 0 and main_indicators is not None:
-                                try:
-                                    if '基本每股收益' in main_indicators['指标'].values:
-                                        eps_row = main_indicators[main_indicators['指标'] == '基本每股收益']
-                                        if not eps_row.empty:
-                                            value_cols = [c for c in eps_row.columns if c != '指标']
-                                            eps_values = []
-                                            for col in value_cols:
-                                                try:
-                                                    v = float(eps_row[col].iloc[0])
-                                                    eps_values.append(v)
-                                                except (ValueError, TypeError):
-                                                    pass
-                                            if len(eps_values) >= 4:
-                                                ttm_eps = sum(eps_values[-4:])
-                                                if ttm_eps > 0:
-                                                    cross_pe = price_value / ttm_eps
-                                                    deviation = abs(cross_pe - pe_value) / pe_value
-                                                    if deviation > 0.5:
-                                                        logger.warning(
-                                                            f'⚠️ [PE交叉验证] {symbol} TTM PE({pe_value:.1f})与年度EPS算的({cross_pe:.1f}) '
-                                                            f'偏差{deviation:.0%}，TTM PE可能因单季利润波动失真'
-                                                        )
-                                                        metrics['pe'] = f'{pe_value:.1f}倍 (TTM, 可能失真, 年度EPS估算{cross_pe:.1f}倍)'
-                                                        if pe_ttm_value:
-                                                            metrics['pe_ttm'] = f'{pe_ttm_value:.1f}倍 (TTM, 可能失真)'
-                                                        metrics['pe_annual_eps'] = round(cross_pe, 1)
-                                except Exception as e_cross:
-                                    logger.debug(f'PE交叉验证异常(不影响主流程): {e_cross}')
-
-
                         else:
                             logger.warning(f"⚠️ [AKShare-PE计算-第1层失败] 实时计算返回空结果，将尝试降级计算")
             except Exception as e:

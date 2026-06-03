@@ -6,6 +6,7 @@
 """
 
 import logging
+import os
 from datetime import datetime
 import re
 
@@ -21,6 +22,99 @@ class UnifiedNewsAnalyzer:
             toolkit: 包含各种新闻获取工具的工具包
         """
         self.toolkit = toolkit
+        self._mongodb_checked = False
+        self._mongodb_available = None
+    
+    def _is_mongodb_available(self) -> bool:
+        """检查MongoDB是否可用
+        优先使用环境变量 USE_MONGODB_STORAGE 控制
+        未设置时尝试连接验证
+        """
+        if self._mongodb_checked:
+            return self._mongodb_available
+        
+        # 优先检查环境变量
+        use_mongo_env = os.environ.get('USE_MONGODB_STORAGE', '').lower()
+        if use_mongo_env in ('false', '0', 'no'):
+            logger.info("[统一新闻工具] 环境变量 USE_MONGODB_STORAGE=false，跳过MongoDB")
+            self._mongodb_available = False
+            self._mongodb_checked = True
+            return False
+        
+        if use_mongo_env in ('true', '1', 'yes'):
+            logger.info("[统一新闻工具] 环境变量 USE_MONGODB_STORAGE=true，使用MongoDB")
+            self._mongodb_available = True
+            self._mongodb_checked = True
+            return True
+        
+        # 未设置环境变量时，尝试连接验证
+        try:
+            from tradingagents.dataflows.cache.app_adapter import get_mongodb_client
+            client = get_mongodb_client()
+            self._mongodb_available = client is not None
+        except Exception:
+            self._mongodb_available = False
+        
+        self._mongodb_checked = True
+        logger.info(f"[统一新闻工具] MongoDB可用性: {self._mongodb_available}")
+        return self._mongodb_available
+    
+    def _fetch_akshare_news_direct(self, stock_code: str, max_news: int = 10) -> str:
+        """绕过MongoDB，直接从AKShare获取东方财富新闻并格式化返回
+        
+        Args:
+            stock_code: 股票代码
+            max_news: 最大新闻数量
+            
+        Returns:
+            str: 格式化的新闻内容，失败时返回空字符串
+        """
+        import re
+        clean_code = re.sub(r'\.(SH|SZ|SS|XSHE|XSHG|HK)$', '', stock_code)
+        
+        try:
+            from tradingagents.dataflows.providers.china.akshare import AKShareProvider
+            provider = AKShareProvider()
+            news_df = provider.get_stock_news_sync(symbol=clean_code, limit=max_news)
+            
+            if news_df is None or news_df.empty:
+                logger.warning(f"[统一新闻工具] AKShare直连未获取到 {stock_code} 的新闻")
+                return ""
+            
+            # 格式化DataFrame为可读文本
+            lines = []
+            now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            lines.append(f"# {stock_code} 最新新闻 (AKShare/东方财富)")
+            lines.append(f"📅 获取时间: {now}")
+            lines.append(f"📊 新闻数量: {len(news_df)} 条\n")
+            
+            for idx, (_, row) in enumerate(news_df.iterrows(), 1):
+                title = str(row.get('标题', row.get('title', '无标题')))
+                date = str(row.get('日期', row.get('date', row.get('发布时间', ''))))
+                content = str(row.get('内容', row.get('content', row.get('摘要', ''))))
+                link = str(row.get('链接', row.get('link', '')))
+                
+                lines.append(f"## {idx}. {title}")
+                lines.append(f"**时间**: {date}")
+                if link:
+                    lines.append(f"**链接**: {link}")
+                lines.append("")
+                if content and content != 'nan':
+                    preview = content[:300] + '...' if len(content) > 300 else content
+                    lines.append(preview)
+                lines.append("")
+                lines.append("---")
+                lines.append("")
+            
+            result = '\n'.join(lines)
+            logger.info(f"[统一新闻工具] ✅ AKShare直连获取成功: {len(news_df)} 条新闻, {len(result)} 字符")
+            return result
+            
+        except Exception as e:
+            logger.error(f"[统一新闻工具] ❌ AKShare直连获取新闻失败: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return ""
         
     def get_stock_news_unified(self, stock_code: str, max_news: int = 10, model_info: str = "") -> str:
         """
@@ -286,39 +380,56 @@ class UnifiedNewsAnalyzer:
         # 获取当前日期
         curr_date = datetime.now().strftime("%Y-%m-%d")
 
-        # 优先级0: 从数据库获取新闻（最高优先级）
+        # 检查MongoDB是否可用
+        mongodb_ok = self._is_mongodb_available()
+
+        if mongodb_ok:
+            # 优先级0: 从数据库获取新闻（MongoDB可用时）
+            try:
+                logger.info(f"[统一新闻工具] 🔍 优先从数据库获取 {stock_code} 的新闻...")
+                db_news = self._get_news_from_database(stock_code, max_news)
+                if db_news:
+                    logger.info(f"[统一新闻工具] ✅ 数据库新闻获取成功: {len(db_news)} 字符")
+                    return self._format_news_result(db_news, "数据库缓存", model_info)
+                else:
+                    logger.info(f"[统一新闻工具] ⚠️ 数据库中没有 {stock_code} 的新闻，尝试同步...")
+
+                    # 🔥 数据库没有数据时，调用同步服务同步新闻
+                    try:
+                        logger.info(f"[统一新闻工具] 📡 调用同步服务同步 {stock_code} 的新闻...")
+                        synced_news = self._sync_news_from_akshare(stock_code, max_news)
+
+                        if synced_news:
+                            logger.info(f"[统一新闻工具] ✅ 同步成功，重新从数据库获取...")
+                            db_news = self._get_news_from_database(stock_code, max_news)
+                            if db_news:
+                                logger.info(f"[统一新闻工具] ✅ 同步后数据库新闻获取成功: {len(db_news)} 字符")
+                                return self._format_news_result(db_news, "数据库缓存(新同步)", model_info)
+                        else:
+                            logger.warning(f"[统一新闻工具] ⚠️ 同步服务未返回新闻数据")
+
+                    except Exception as sync_error:
+                        logger.warning(f"[统一新闻工具] ⚠️ 同步服务调用失败: {sync_error}")
+
+                    logger.info(f"[统一新闻工具] ⚠️ 同步后仍无数据，尝试其他数据源...")
+            except Exception as e:
+                logger.warning(f"[统一新闻工具] 数据库新闻获取失败: {e}")
+        else:
+            logger.info(f"[统一新闻工具] ⚠️ MongoDB不可用，跳过数据库路径")
+
+        # 优先级1: AKShare直连（绕过MongoDB，适用于所有场景）
         try:
-            logger.info(f"[统一新闻工具] 🔍 优先从数据库获取 {stock_code} 的新闻...")
-            db_news = self._get_news_from_database(stock_code, max_news)
-            if db_news:
-                logger.info(f"[统一新闻工具] ✅ 数据库新闻获取成功: {len(db_news)} 字符")
-                return self._format_news_result(db_news, "数据库缓存", model_info)
+            logger.info(f"[统一新闻工具] 🔧 尝试AKShare直连获取 {stock_code} 新闻...")
+            akshare_news = self._fetch_akshare_news_direct(stock_code, max_news)
+            if akshare_news:
+                logger.info(f"[统一新闻工具] ✅ AKShare直连新闻获取成功: {len(akshare_news)} 字符")
+                return self._format_news_result(akshare_news, "AKShare/东方财富", model_info)
             else:
-                logger.info(f"[统一新闻工具] ⚠️ 数据库中没有 {stock_code} 的新闻，尝试同步...")
-
-                # 🔥 数据库没有数据时，调用同步服务同步新闻
-                try:
-                    logger.info(f"[统一新闻工具] 📡 调用同步服务同步 {stock_code} 的新闻...")
-                    synced_news = self._sync_news_from_akshare(stock_code, max_news)
-
-                    if synced_news:
-                        logger.info(f"[统一新闻工具] ✅ 同步成功，重新从数据库获取...")
-                        # 重新从数据库获取
-                        db_news = self._get_news_from_database(stock_code, max_news)
-                        if db_news:
-                            logger.info(f"[统一新闻工具] ✅ 同步后数据库新闻获取成功: {len(db_news)} 字符")
-                            return self._format_news_result(db_news, "数据库缓存(新同步)", model_info)
-                    else:
-                        logger.warning(f"[统一新闻工具] ⚠️ 同步服务未返回新闻数据")
-
-                except Exception as sync_error:
-                    logger.warning(f"[统一新闻工具] ⚠️ 同步服务调用失败: {sync_error}")
-
-                logger.info(f"[统一新闻工具] ⚠️ 同步后仍无数据，尝试其他数据源...")
+                logger.warning(f"[统一新闻工具] ⚠️ AKShare直连未返回 {stock_code} 的新闻")
         except Exception as e:
-            logger.warning(f"[统一新闻工具] 数据库新闻获取失败: {e}")
+            logger.warning(f"[统一新闻工具] AKShare直连新闻获取失败: {e}")
 
-        # 优先级1: 东方财富实时新闻
+        # 优先级2: 东方财富实时新闻
         try:
             if hasattr(self.toolkit, 'get_realtime_stock_news'):
                 logger.info(f"[统一新闻工具] 尝试东方财富实时新闻...")

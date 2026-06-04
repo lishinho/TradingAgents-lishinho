@@ -1839,17 +1839,160 @@ class DataSourceManager:
         return f"⚠️ Tushare基本面数据功能暂时不可用，请使用其他数据源"
 
     def _get_akshare_fundamentals(self, symbol: str) -> str:
-        """从 AKShare 生成基本面分析"""
-        logger.debug(f"📊 [AKShare] 调用参数: symbol={symbol}")
-
-        try:
-            # AKShare 没有直接的基本面数据接口，使用生成分析
-            logger.info(f"📊 [数据来源: AKShare-生成分析] 生成基本面分析: {symbol}")
-            return self._generate_fundamentals_analysis(symbol)
-
-        except Exception as e:
-            logger.error(f"❌ [数据来源: AKShare异常] 生成基本面分析失败: {e}")
-            return f"❌ 生成{symbol}基本面分析失败: {e}"
+        """从 AKShare 获取基本面数据（直连，不依赖MongoDB）
+        使用 stock_financial_abstract_ths 获取真实EPS、净利润、ROE等
+        使用 stock_zh_a_spot_em 获取当前股价计算PE
+        
+        Args:
+            symbol: 股票代码
+            
+        Returns:
+            str: 格式化的基本面数据报告
+        """
+        import re
+        clean_symbol = re.sub(r'\.(SH|SZ|SS|XSHE|XSHG|HK)$', '', symbol)
+        
+        max_retries = 3
+        last_error = None
+        
+        for attempt in range(1, max_retries + 1):
+            try:
+                logger.info(f"📊 [AKShare-直连] 第{attempt}/{max_retries}次尝试获取{symbol}基本面数据")
+                
+                import akshare as ak
+                import pandas as pd
+                from datetime import datetime
+                
+                # 1. 获取年度财务数据（最近2年）
+                df_year = ak.stock_financial_abstract_ths(symbol=clean_symbol, indicator='按年度')
+                if df_year is None or df_year.empty:
+                    raise ValueError(f"AKShare年度财务数据为空: {symbol}")
+                
+                # 找到最近一年（最大报告期）
+                df_year['报告期_数值'] = pd.to_numeric(df_year['报告期'], errors='coerce')
+                recent_years = df_year.dropna(subset=['报告期_数值']).sort_values('报告期_数值', ascending=False)
+                
+                if recent_years.empty:
+                    raise ValueError(f"无法解析{symbol}的年度报告期")
+                
+                # 获取最新2年的数据
+                year_data = {}
+                for _, row in recent_years.head(2).iterrows():
+                    yr = str(int(row['报告期_数值']))
+                    year_data[yr] = {
+                        'eps': float(row.get('基本每股收益', 0) or 0),
+                        'net_profit': row.get('净利润', 'N/A'),
+                        'roe': float(row.get('净资产收益率', 0) or 0),
+                        'gross_margin': float(row.get('销售毛利率', 0) or 0),
+                        'net_margin': float(row.get('销售净利率', 0) or 0),
+                        'bps': float(row.get('每股净资产', 0) or 0),  # book value per share
+                        'asset_liability_ratio': float(row.get('资产负债率', 0) or 0),
+                        'current_ratio': float(row.get('流动比率', 0) or 0),
+                        'quick_ratio': float(row.get('速动比率', 0) or 0),
+                    }
+                
+                latest_year = list(year_data.keys())[0]
+                latest = year_data[latest_year]
+                
+                # 2. 获取当前股价
+                current_price = None
+                try:
+                    spot_df = ak.stock_zh_a_spot_em()
+                    mask = spot_df['代码'] == clean_symbol
+                    if mask.any():
+                        row = spot_df[mask].iloc[0]
+                        current_price = float(row['最新价'])
+                        logger.info(f"✅ [AKShare-直连] {symbol} 当前股价: {current_price}")
+                    else:
+                        logger.warning(f"⚠️ [AKShare-直连] 未找到{symbol}的行情数据")
+                except Exception as e:
+                    logger.warning(f"⚠️ [AKShare-直连] 获取股价失败: {e}")
+                
+                # 3. 计算估值指标
+                eps = latest['eps']
+                bps = latest['bps']
+                roe = latest['roe']
+                
+                pe = None
+                pb = None
+                if current_price and eps and eps > 0:
+                    pe = round(current_price / eps, 1)
+                if current_price and bps and bps > 0:
+                    pb = round(current_price / bps, 2)
+                
+                # 4. 构建报告
+                now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                lines = []
+                lines.append(f"# {symbol} 基本面分析数据")
+                lines.append(f"**股票类型**: 中国A股")
+                lines.append(f"**货币**: 人民币 (¥)")
+                lines.append(f"**分析日期**: {now}")
+                lines.append(f"**数据来源**: AKShare (直连)/同花顺财务摘要\n")
+                
+                # 股价信息
+                lines.append("## 💰 当前价格信息")
+                if current_price:
+                    lines.append(f"- **当前股价**: ¥{current_price}")
+                lines.append(f"- **数据年份**: {latest_year}")
+                lines.append("")
+                
+                # 估值指标
+                lines.append("## 📊 核心估值指标")
+                if pe:
+                    lines.append(f"- **市盈率(PE)**: {pe}倍 (股价¥{current_price} ÷ EPS¥{eps})")
+                if pb:
+                    lines.append(f"- **市净率(PB)**: {pb}倍 (股价¥{current_price} ÷ 每股净资产¥{bps})")
+                lines.append(f"- **每股收益(EPS)**: ¥{eps}")
+                lines.append(f"- **每股净资产(BPS)**: ¥{bps}")
+                lines.append(f"- **净资产收益率(ROE)**: {roe:.1f}%")
+                lines.append("")
+                
+                # 盈利能力
+                lines.append("## 💹 盈利能力")
+                lines.append(f"- **毛利率**: {latest['gross_margin']:.1f}%")
+                lines.append(f"- **净利率**: {latest['net_margin']:.1f}%")
+                lines.append(f"- **ROE**: {roe:.1f}%")
+                lines.append(f"- **净利润**: {latest['net_profit']}")
+                lines.append("")
+                
+                # 财务健康度
+                lines.append("## 🛡️ 财务健康度")
+                lines.append(f"- **资产负债率**: {latest['asset_liability_ratio']:.1f}%")
+                lines.append(f"- **流动比率**: {latest['current_ratio']:.2f}")
+                lines.append(f"- **速动比率**: {latest['quick_ratio']:.2f}")
+                lines.append("")
+                
+                # 同比对比
+                if len(year_data) >= 2:
+                    prev_year = list(year_data.keys())[1]
+                    prev = year_data[prev_year]
+                    lines.append(f"## 📈 同比对比 ({latest_year} vs {prev_year})")
+                    eps_change = ((latest['eps'] - prev['eps']) / prev['eps'] * 100) if prev['eps'] else 0
+                    roe_change = latest['roe'] - prev['roe']
+                    lines.append(f"- **EPS变化**: {latest['eps']:.3f} vs {prev['eps']:.3f} ({eps_change:+.1f}%)")
+                    lines.append(f"- **ROE变化**: {latest['roe']:.1f}% vs {prev['roe']:.1f}% ({roe_change:+.1f}pp)")
+                    lines.append(f"- **毛利率变化**: {latest['gross_margin']:.1f}% vs {prev['gross_margin']:.1f}%")
+                    lines.append("")
+                
+                lines.append("---")
+                lines.append(f"✅ **数据说明**: 财务指标基于AKShare真实财务数据计算")
+                
+                report = '\n'.join(lines)
+                logger.info(f"✅ [AKShare-直连] {symbol} 基本面数据获取成功: {len(report)} 字符")
+                return report
+                
+            except Exception as e:
+                last_error = e
+                logger.warning(f"⚠️ [AKShare-直连] 第{attempt}次尝试失败: {e}")
+                if attempt < max_retries:
+                    import time
+                    time.sleep(2 * attempt)  # 递增等待
+                continue
+        
+        # 所有重试失败
+        error_msg = f"❌ AKShare基本面数据获取失败（已重试{max_retries}次）: {last_error}"
+        logger.error(error_msg)
+        return error_msg
 
     def _get_valuation_indicators(self, symbol: str) -> Dict:
         """从stock_basic_info集合获取估值指标"""
@@ -2046,9 +2189,11 @@ class DataSourceManager:
                     logger.error(f"❌ 备用数据源{source.value}异常: {e}")
                     continue
 
-        # 所有数据源都失败，生成基本分析
-        logger.warning(f"⚠️ [数据来源: 生成分析] 所有数据源失败，生成基本分析: {symbol}")
-        return self._generate_fundamentals_analysis(symbol)
+        # 所有数据源都失败
+        error_msg = (f"❌ {symbol}基本面数据获取失败（所有数据源均不可用，已重试3次）\n"
+                     f"无法获取真实财务数据，分析终止。请检查网络连接或数据源配置。")
+        logger.error(error_msg)
+        return error_msg
 
     def _get_mongodb_news(self, symbol: str, hours_back: int, limit: int) -> List[Dict[str, Any]]:
         """从MongoDB获取新闻数据"""

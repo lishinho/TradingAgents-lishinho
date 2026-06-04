@@ -613,6 +613,20 @@ def create_fundamentals_analyst(llm, toolkit):
 
                         logger.info(f"✅ [工具调用] 统一工具调用成功")
                         logger.info(f"📊 [工具调用] 返回数据长度: {len(combined_data)}字符")
+
+                        # 🔥 数据有效性检查：如果返回"❌"或太短（<200字符），判断为获取失败
+                        is_invalid = (
+                            not combined_data
+                            or len(str(combined_data).strip()) < 200
+                            or "❌" in str(combined_data)
+                            or "无法获取" in str(combined_data)
+                            or "所有数据源" in str(combined_data)
+                        )
+                        if is_invalid:
+                            error_content = str(combined_data)[:300] if combined_data else "空数据"
+                            logger.warning(f"⚠️ [数据验证] 基本面数据无效 (长度: {len(str(combined_data)) if combined_data else 0}, 内容: {error_content})")
+                            # 返回工具调用信号，让LangGraph重新尝试（或最终失败）
+                            raise ValueError(f"基本面数据获取失败（无效数据）: {error_content}")
                         logger.debug(f"📊 [DEBUG] 统一工具数据获取成功，长度: {len(combined_data)}字符")
                         # 将统一工具返回的数据写入日志，便于排查与分析
                         try:
@@ -634,6 +648,8 @@ def create_fundamentals_analyst(llm, toolkit):
                     else:
                         combined_data = "统一基本面分析工具不可用"
                         logger.debug(f"📊 [DEBUG] 统一工具未找到")
+                except ValueError:
+                    raise  # 数据验证失败，向上传播中断分析
                 except Exception as e:
                     combined_data = f"统一基本面分析工具调用失败: {e}"
                     logger.debug(f"📊 [DEBUG] 统一工具调用异常: {e}")

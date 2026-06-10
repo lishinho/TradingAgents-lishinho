@@ -971,24 +971,219 @@ class OptimizedChinaDataProvider:
         }
 
     def _estimate_financial_metrics(self, symbol: str, current_price: str) -> dict:
-        """获取真实财务指标（从 MongoDB、AKShare、Tushare 获取，失败则抛出异常）"""
+        """获取真实财务指标（从 MongoDB、AKShare、BaoStock 获取，失败则抛出异常）"""
 
-        # 提取价格数值
+        # 🔴 修复：验证股价是否有效，拒绝使用默认值
+        price_value = None
         try:
-            price_value = float(current_price.replace('¥', '').replace(',', ''))
-        except:
-            price_value = 10.0  # 默认值
+            if current_price and current_price != 'N/A':
+                price_str = current_price.replace('¥', '').replace(',', '').strip()
+                price_value = float(price_str)
+                # 基本验证：股价应该在合理范围内（0.01 ~ 10000元）
+                if price_value <= 0 or price_value > 10000:
+                    logger.warning(f"⚠️ [股价验证失败] 股价值异常: {price_value}元，期望范围: 0.01~10000元")
+                    price_value = None
+        except (ValueError, AttributeError, TypeError) as e:
+            logger.warning(f"⚠️ [股价验证失败] 股价解析失败: {current_price}, 错误: {e}")
 
-        # 尝试获取真实财务数据
+        # 如果股价无效，尝试从BaoStock获取实时PE/PB
+        if price_value is None:
+            logger.warning(f"⚠️ [PE/PB计算] 股价无效({current_price})，尝试从BaoStock获取实时数据: {symbol}")
+            
+            # 🔥 优先尝试BaoStock获取实时PE/PB
+            baostock_metrics = self._get_baostock_pe_pb(symbol)
+            if baostock_metrics:
+                logger.info(f"✅ [BaoStock] 获取成功: {symbol} PE={baostock_metrics['pe']}, PB={baostock_metrics['pb']}")
+                
+                # 🔥 使用BaoStock数据构建财务指标
+                from .providers.china.akshare import get_akshare_provider
+                import asyncio
+                
+                try:
+                    loop = asyncio.get_event_loop()
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                
+                akshare_provider = get_akshare_provider()
+                
+                try:
+                    # 尝试获取完整财务数据
+                    financial_data = loop.run_until_complete(
+                        akshare_provider.get_stock_financial_data(symbol)
+                    )
+                    
+                    if financial_data:
+                        # 合并BaoStock的PE/PB数据
+                        # 创建临时的stock_info字典
+                        stock_info = {
+                            'code': symbol,
+                            'price': baostock_metrics.get('current_price_numeric', 10.0),
+                        }
+                        metrics = self._parse_akshare_financial_data(financial_data, stock_info, baostock_metrics.get('current_price_numeric', 10.0))
+                        if metrics:
+                            logger.info(f"✅ [财务指标] 合并BaoStock PE/PB成功: {symbol}")
+                            return metrics
+                except Exception as e:
+                    logger.warning(f"⚠️ [AKShare] 获取财务数据失败: {e}")
+                
+                # 如果AKShare失败，直接返回BaoStock的PE/PB数据
+                return baostock_metrics
+            
+            # 🔥 如果BaoStock也失败，抛出明确的告警错误
+            error_msg = (
+                f"🔴 [数据获取失败告警] 股票 {symbol} 无法获取有效估值数据！\n"
+                f"   - 股价获取失败: {current_price}\n"
+                f"   - BaoStock PE/PB获取失败\n"
+                f"   - 请检查网络连接或股票代码是否正确"
+            )
+            logger.error(f"❌ {error_msg}")
+            raise ValueError(error_msg)
+
+        # 股价有效，继续正常流程
+        logger.info(f"📊 [股价验证通过] {symbol} 股价: {price_value}元")
+
+        # 🔥 修复：即使股价有效，也优先从BaoStock获取PE/PB数据
+        # 因为AKShare/MongoDB获取财务数据可能失败，导致PE/PB计算错误
+        logger.info(f"🔍 [PE/PB优化] 股价有效，但优先从BaoStock获取PE/PB数据以确保准确性")
+        baostock_metrics = self._get_baostock_pe_pb(symbol)
+        if baostock_metrics:
+            logger.info(f"✅ [BaoStock] 获取成功: {symbol} PE={baostock_metrics['pe']}, PB={baostock_metrics['pb']}")
+            
+            # 返回BaoStock的PE/PB数据
+            return baostock_metrics
+        
+        # 如果BaoStock也失败，尝试原有的财务数据获取逻辑
+        logger.warning(f"⚠️ [PE/PB优化] BaoStock获取失败，尝试AKShare获取财务数据")
         real_metrics = self._get_real_financial_metrics(symbol, price_value)
         if real_metrics:
             logger.info(f"✅ 使用真实财务数据: {symbol}")
             return real_metrics
 
         # 如果无法获取真实数据，抛出异常
-        error_msg = f"无法获取股票 {symbol} 的财务数据。已尝试所有数据源（MongoDB、AKShare、Tushare）均失败。"
+        error_msg = f"无法获取股票 {symbol} 的财务数据。已尝试所有数据源（MongoDB、AKShare、BaoStock）均失败。"
         logger.error(f"❌ {error_msg}")
         raise ValueError(error_msg)
+
+    def _get_baostock_pe_pb(self, symbol: str) -> Optional[dict]:
+        """
+        🔥 从BaoStock获取实时PE/PB数据（新增方法）
+        
+        Args:
+            symbol: 6位股票代码（如：600930）
+        
+        Returns:
+            dict: 包含 PE、PB、PE_TTM 等指标的字典，失败返回 None
+        
+        Raises:
+            不抛出异常，只记录日志并返回 None
+        """
+        try:
+            import baostock as bs
+            from datetime import datetime, timedelta
+            
+            # 标准化股票代码
+            code = str(symbol).zfill(6)
+            if code.startswith('6'):
+                bs_code = f"sh.{code}"
+            else:
+                bs_code = f"sz.{code}"
+            
+            logger.info(f"🔍 [BaoStock] 开始获取 {symbol} 的PE/PB数据 (代码: {bs_code})")
+            
+            # 登录BaoStock
+            bs.login()
+            
+            try:
+                # 获取最近10个交易日的日线数据（包含PE/PB）
+                end_date = datetime.now().strftime('%Y-%m-%d')
+                start_date = (datetime.now() - timedelta(days=15)).strftime('%Y-%m-%d')
+                
+                rs = bs.query_history_k_data_plus(
+                    bs_code,
+                    'date,close,peTTM,pbMRQ',
+                    start_date=start_date,
+                    end_date=end_date,
+                    frequency='d',
+                    adjustflag='3'
+                )
+                
+                data_list = []
+                while rs.error_code == '0' and rs.next():
+                    data_list.append(rs.get_row_data())
+                
+                if not data_list:
+                    logger.warning(f"⚠️ [BaoStock] 无数据返回: {symbol}, bs_code={bs_code}")
+                    return None
+                
+                # 获取最新有效数据
+                latest_valid = None
+                for row in reversed(data_list):
+                    if row[2] and row[2] != 'None' and row[3] and row[3] != 'None':
+                        latest_valid = row
+                        break
+                
+                if not latest_valid:
+                    logger.warning(f"⚠️ [BaoStock] 所有数据PE/PB均为空: {symbol}")
+                    return None
+                
+                # 解析数据
+                date = latest_valid[0]
+                price = float(latest_valid[1]) if latest_valid[1] and latest_valid[1] != 'None' else None
+                pe_ttm = float(latest_valid[2]) if latest_valid[2] and latest_valid[2] != 'None' else None
+                pb = float(latest_valid[3]) if latest_valid[3] and latest_valid[3] != 'None' else None
+                
+                if not pe_ttm or not pb:
+                    logger.warning(f"⚠️ [BaoStock] PE/PB解析失败: PE={pe_ttm}, PB={pb}")
+                    return None
+                
+                logger.info(f"✅ [BaoStock] 获取成功: {symbol} 日期={date}, 股价={price}元, PE_TTM={pe_ttm:.2f}, PB={pb:.2f}")
+                
+                # 计算基本面评分
+                fundamental_score = self._calculate_pe_pb_score(pe_ttm, pb)
+                
+                return {
+                    'pe': f"{pe_ttm:.1f}倍",
+                    'pe_ttm': f"{pe_ttm:.1f}倍",
+                    'pb': f"{pb:.2f}倍",
+                    'price': f"¥{price:.2f}" if price else None,
+                    'current_price_numeric': price,
+                    'data_source': 'BaoStock',
+                    'fundamental_score': fundamental_score,
+                    'analysis_date': date,
+                    'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                }
+                
+            finally:
+                bs.logout()
+                
+        except ImportError:
+            logger.error(f"❌ [BaoStock] 模块未安装，请运行: pip install baostock")
+            return None
+        except Exception as e:
+            logger.error(f"❌ [BaoStock] 获取失败: {symbol}, 错误类型: {type(e).__name__}, 错误信息: {e}")
+            return None
+
+    def _calculate_pe_pb_score(self, pe_ttm: float, pb: float) -> str:
+        """
+        🔥 根据PE/PB计算基本面评分
+        
+        Args:
+            pe_ttm: 市盈率（TTM）
+            pb: 市净率
+        
+        Returns:
+            str: 评分结果（低估/合理/高估/极高二档）
+        """
+        # 简单评分逻辑（可后续优化）
+        if pe_ttm < 20 and pb < 2:
+            return "低估"
+        elif pe_ttm < 40 and pb < 3:
+            return "合理"
+        elif pe_ttm < 60:
+            return "偏高"
+        else:
+            return "极高"
 
     def _get_real_financial_metrics(self, symbol: str, price_value: float) -> dict:
         """获取真实财务指标 - 优先使用数据库缓存，再使用API"""
@@ -1491,8 +1686,15 @@ class OptimizedChinaDataProvider:
             logger.error(f"❌ MongoDB财务数据解析失败: {e}", exc_info=True)
             return None
 
-    def _parse_akshare_financial_data(self, financial_data: dict, stock_info: dict, price_value: float) -> dict:
-        """解析AKShare财务数据为指标"""
+    def _parse_akshare_financial_data(self, financial_data: dict, stock_info: dict, price_value: float, baostock_metrics: dict = None) -> dict:
+        """解析AKShare财务数据为指标
+        
+        Args:
+            financial_data: AKShare财务数据字典
+            stock_info: 股票信息字典
+            price_value: 当前股价
+            baostock_metrics: 可选的BaoStock PE/PB数据，用于数据融合
+        """
         try:
             # 获取最新的财务数据
             balance_sheet = financial_data.get('balance_sheet', [])
@@ -1543,6 +1745,34 @@ class OptimizedChinaDataProvider:
             pe_value = None
             pe_ttm_value = None
             pb_value = None
+
+            # 🔥 如果传入了BaoStock数据，优先使用它
+            if baostock_metrics:
+                logger.info(f"✅ [PE/PB融合] 使用BaoStock数据源")
+                pe_str = baostock_metrics.get('pe', '')
+                pe_ttm_str = baostock_metrics.get('pe_ttm', '')
+                pb_str = baostock_metrics.get('pb', '')
+                
+                if '倍' in pe_str:
+                    pe_value = float(pe_str.replace('倍', '').strip())
+                    metrics["pe"] = f"{pe_value:.1f}倍 (BaoStock)"
+                    logger.info(f"✅ [BaoStock-PE] PE={pe_value:.1f}倍")
+                
+                if '倍' in pe_ttm_str:
+                    pe_ttm_value = float(pe_ttm_str.replace('倍', '').strip())
+                    metrics["pe_ttm"] = f"{pe_ttm_value:.1f}倍 (BaoStock)"
+                    logger.info(f"✅ [BaoStock-PE_TTM] PE_TTM={pe_ttm_value:.1f}倍")
+                
+                if '倍' in pb_str:
+                    pb_value = float(pb_str.replace('倍', '').strip())
+                    metrics["pb"] = f"{pb_value:.2f}倍 (BaoStock)"
+                    logger.info(f"✅ [BaoStock-PB] PB={pb_value:.2f}倍")
+                
+                # 更新price_value
+                if baostock_metrics.get('current_price_numeric'):
+                    price_value = baostock_metrics['current_price_numeric']
+                    metrics['price'] = f"¥{price_value:.2f}"
+                    logger.info(f"✅ [BaoStock-股价] 股价={price_value:.2f}元")
 
             try:
                 # 获取股票代码
@@ -1596,6 +1826,41 @@ class OptimizedChinaDataProvider:
                             logger.warning(f"⚠️ [AKShare-PE计算-第1层失败] 实时计算返回空结果，将尝试降级计算")
             except Exception as e:
                 logger.warning(f"⚠️ [AKShare-PE计算-第1层异常] 实时计算失败: {e}，将尝试降级计算")
+            
+            # 🔥 如果MongoDB的实时计算失败，尝试从BaoStock获取PE/PB（新增降级方案）
+            if pe_value is None or pb_value is None:
+                logger.info(f"🔄 [AKShare-PE计算-降级方案] 尝试从BaoStock获取PE/PB")
+                try:
+                    baostock_metrics = self._get_baostock_pe_pb(stock_code)
+                    if baostock_metrics:
+                        # 使用BaoStock的数据填充PE/PB
+                        if pe_value is None:
+                            pe_str = baostock_metrics.get('pe', '')
+                            if '倍' in pe_str:
+                                pe_value = float(pe_str.replace('倍', ''))
+                                metrics["pe"] = f"{pe_value:.1f}倍 (BaoStock)"
+                                logger.info(f"✅ [AKShare-BaoStock降级] PE={pe_value:.1f}倍")
+                        
+                        if pe_ttm_value is None:
+                            pe_ttm_str = baostock_metrics.get('pe_ttm', '')
+                            if '倍' in pe_ttm_str:
+                                pe_ttm_value = float(pe_ttm_str.replace('倍', ''))
+                                metrics["pe_ttm"] = f"{pe_ttm_value:.1f}倍 (BaoStock)"
+                                logger.info(f"✅ [AKShare-BaoStock降级] PE_TTM={pe_ttm_value:.1f}倍")
+                        
+                        if pb_value is None:
+                            pb_str = baostock_metrics.get('pb', '')
+                            if '倍' in pb_str:
+                                pb_value = float(pb_str.replace('倍', ''))
+                                metrics["pb"] = f"{pb_value:.2f}倍 (BaoStock)"
+                                logger.info(f"✅ [AKShare-BaoStock降级] PB={pb_value:.2f}倍")
+                        
+                        # 如果有股价信息，也更新总市值
+                        if baostock_metrics.get('current_price_numeric') and metrics.get('total_mv') == 'N/A':
+                            # 需要总股本来计算市值，这里暂时跳过
+                            pass
+                except Exception as e:
+                    logger.warning(f"⚠️ [AKShare-BaoStock降级失败] {e}")
 
             # 获取ROE - 直接从指标中获取
             roe_value = indicators_dict.get('净资产收益率(ROE)')

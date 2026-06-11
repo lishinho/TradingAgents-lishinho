@@ -506,8 +506,8 @@ class OptimizedChinaDataProvider:
 - **资产负债率**: {financial_estimates.get('debt_ratio', 'N/A')}
 
 ## 💡 基础评估
-- **基本面评分**: {financial_estimates['fundamental_score']}/10
-- **风险等级**: {financial_estimates['risk_level']}
+- **基本面评分**: {financial_estimates.get('fundamental_score', 'N/A')}/10
+- **风险等级**: {financial_estimates.get('risk_level', 'N/A')}
 
 ---
 **重要声明**: 本报告基于公开数据和模型估算生成，仅供参考，不构成投资建议。
@@ -539,16 +539,16 @@ class OptimizedChinaDataProvider:
 - **股息收益率**: {financial_estimates.get('dividend_yield', 'N/A')}
 
 ### 盈利能力指标
-- **净资产收益率(ROE)**: {financial_estimates['roe']}
-- **总资产收益率(ROA)**: {financial_estimates['roa']}
-- **毛利率**: {financial_estimates['gross_margin']}
-- **净利率**: {financial_estimates['net_margin']}
+- **净资产收益率(ROE)**: {financial_estimates.get('roe', 'N/A')}
+- **总资产收益率(ROA)**: {financial_estimates.get('roa', 'N/A')}
+- **毛利率**: {financial_estimates.get('gross_margin', 'N/A')}
+- **净利率**: {financial_estimates.get('net_margin', 'N/A')}
 
 ### 财务健康度
-- **资产负债率**: {financial_estimates['debt_ratio']}
-- **流动比率**: {financial_estimates['current_ratio']}
-- **速动比率**: {financial_estimates['quick_ratio']}
-- **现金比率**: {financial_estimates['cash_ratio']}
+- **资产负债率**: {financial_estimates.get('debt_ratio', 'N/A')}
+- **流动比率**: {financial_estimates.get('current_ratio', 'N/A')}
+- **速动比率**: {financial_estimates.get('quick_ratio', 'N/A')}
+- **现金比率**: {financial_estimates.get('cash_ratio', 'N/A')}
 
 ## 📈 行业分析
 {industry_info['analysis']}
@@ -561,10 +561,10 @@ class OptimizedChinaDataProvider:
 {self._analyze_growth_potential(symbol, industry_info)}
 
 ## 💡 投资建议
-- **基本面评分**: {financial_estimates['fundamental_score']}/10
-- **估值吸引力**: {financial_estimates['valuation_score']}/10
-- **成长潜力**: {financial_estimates['growth_score']}/10
-- **风险等级**: {financial_estimates['risk_level']}
+- **基本面评分**: {financial_estimates.get('fundamental_score', 'N/A')}/10
+- **估值吸引力**: {financial_estimates.get('valuation_score', 'N/A')}/10
+- **成长潜力**: {financial_estimates.get('growth_score', 'N/A')}/10
+- **风险等级**: {financial_estimates.get('risk_level', 'N/A')}
 
 {self._generate_investment_advice(financial_estimates, industry_info)}
 
@@ -604,10 +604,10 @@ class OptimizedChinaDataProvider:
 - **净利率**: {financial_estimates.get('net_margin', 'N/A')}
 
 ### 财务健康度
-- **资产负债率**: {financial_estimates['debt_ratio']}
-- **流动比率**: {financial_estimates['current_ratio']}
-- **速动比率**: {financial_estimates['quick_ratio']}
-- **现金比率**: {financial_estimates['cash_ratio']}
+- **资产负债率**: {financial_estimates.get('debt_ratio', 'N/A')}
+- **流动比率**: {financial_estimates.get('current_ratio', 'N/A')}
+- **速动比率**: {financial_estimates.get('quick_ratio', 'N/A')}
+- **现金比率**: {financial_estimates.get('cash_ratio', 'N/A')}
 
 ## 📈 行业分析
 
@@ -633,10 +633,10 @@ class OptimizedChinaDataProvider:
 ## 💡 投资建议
 
 ### 综合评分
-- **基本面评分**: {financial_estimates['fundamental_score']}/10
-- **估值吸引力**: {financial_estimates['valuation_score']}/10
-- **成长潜力**: {financial_estimates['growth_score']}/10
-- **风险等级**: {financial_estimates['risk_level']}
+- **基本面评分**: {financial_estimates.get('fundamental_score', 'N/A')}/10
+- **估值吸引力**: {financial_estimates.get('valuation_score', 'N/A')}/10
+- **成长潜力**: {financial_estimates.get('growth_score', 'N/A')}/10
+- **风险等级**: {financial_estimates.get('risk_level', 'N/A')}
 
 ### 操作建议
 {self._generate_investment_advice(financial_estimates, industry_info)}
@@ -2398,7 +2398,10 @@ class OptimizedChinaDataProvider:
 
     def _analyze_valuation(self, financial_estimates: dict) -> str:
         """分析估值水平"""
-        valuation_score = financial_estimates['valuation_score']
+        try:
+            valuation_score = float(financial_estimates.get('valuation_score', 5))
+        except (ValueError, TypeError):
+            valuation_score = 5.0
 
         if valuation_score >= 8:
             return "当前估值水平较为合理，具有一定的投资价值。市盈率和市净率相对较低，安全边际较高。"
@@ -2418,7 +2421,7 @@ class OptimizedChinaDataProvider:
 
     def _analyze_risks(self, symbol: str, financial_estimates: dict, industry_info: dict) -> str:
         """分析投资风险"""
-        risk_level = financial_estimates['risk_level']
+        risk_level = financial_estimates.get('risk_level', '中等')
 
         risk_analysis = f"**风险等级**: {risk_level}\n\n"
 
@@ -2445,9 +2448,21 @@ class OptimizedChinaDataProvider:
 
     def _generate_investment_advice(self, financial_estimates: dict, industry_info: dict) -> str:
         """生成投资建议"""
-        fundamental_score = financial_estimates['fundamental_score']
-        valuation_score = financial_estimates['valuation_score']
-        growth_score = financial_estimates['growth_score']
+        # 处理可能的字符串类型评分
+        try:
+            fundamental_score = float(financial_estimates.get('fundamental_score', 5))
+        except (ValueError, TypeError):
+            fundamental_score = 5.0
+        
+        try:
+            valuation_score = float(financial_estimates.get('valuation_score', 5))
+        except (ValueError, TypeError):
+            valuation_score = 5.0
+        
+        try:
+            growth_score = float(financial_estimates.get('growth_score', 5))
+        except (ValueError, TypeError):
+            growth_score = 5.0
 
         total_score = (fundamental_score + valuation_score + growth_score) / 3
 

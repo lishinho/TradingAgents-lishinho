@@ -1164,7 +1164,7 @@ class OptimizedChinaDataProvider:
             logger.error(f"❌ [BaoStock] 获取失败: {symbol}, 错误类型: {type(e).__name__}, 错误信息: {e}")
             return None
 
-    def _calculate_pe_pb_score(self, pe_ttm: float, pb: float) -> str:
+    def _calculate_pe_pb_score(self, pe_ttm: float, pb: float) -> float:
         """
         🔥 根据PE/PB计算基本面评分
         
@@ -1173,17 +1173,42 @@ class OptimizedChinaDataProvider:
             pb: 市净率
         
         Returns:
-            str: 评分结果（低估/合理/高估/极高二档）
+            float: 评分结果（0-10分）
         """
-        # 简单评分逻辑（可后续优化）
-        if pe_ttm < 20 and pb < 2:
-            return "低估"
-        elif pe_ttm < 40 and pb < 3:
-            return "合理"
+        # 基于PE/PB的量化评分逻辑
+        # PE评分（满分5分）
+        if pe_ttm < 10:
+            pe_score = 5.0  # 极低估值
+        elif pe_ttm < 20:
+            pe_score = 4.5  # 低估
+        elif pe_ttm < 30:
+            pe_score = 4.0  # 合理偏低
+        elif pe_ttm < 40:
+            pe_score = 3.5  # 合理
+        elif pe_ttm < 50:
+            pe_score = 3.0  # 偏高
         elif pe_ttm < 60:
-            return "偏高"
+            pe_score = 2.5  # 高估
         else:
-            return "极高"
+            pe_score = 2.0  # 极高估
+        
+        # PB评分（满分5分）
+        if pb < 1:
+            pb_score = 5.0  # 极低估值
+        elif pb < 2:
+            pb_score = 4.5  # 低估
+        elif pb < 3:
+            pb_score = 4.0  # 合理偏低
+        elif pb < 4:
+            pb_score = 3.5  # 合理
+        elif pb < 5:
+            pb_score = 3.0  # 偏高
+        else:
+            pb_score = 2.5  # 高估
+        
+        # 综合评分
+        total_score = (pe_score + pb_score) / 2
+        return round(total_score, 1)
 
     def _get_real_financial_metrics(self, symbol: str, price_value: float) -> dict:
         """获取真实财务指标 - 优先使用数据库缓存，再使用API"""

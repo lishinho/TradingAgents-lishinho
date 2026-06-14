@@ -1329,26 +1329,52 @@ class Toolkit:
                 logger.info(f"🇨🇳🇭🇰 [统一情绪工具] 处理中文市场情绪...")
 
                 try:
-                    # 可以集成微博、雪球、东方财富等中文社交媒体情绪
-                    # 目前使用基础的情绪分析
-                    sentiment_summary = f"""
-## 中文市场情绪分析
+                    from tradingagents.dataflows.providers.china.guba_sentiment import (
+                        get_eastmoney_guba_sentiment,
+                        get_guba_desire_score,
+                        get_guba_focus_score,
+                        get_guba_long_score,
+                        get_institutional_participation,
+                    )
 
-**股票**: {ticker} ({market_info['market_name']})
-**分析日期**: {curr_date}
+                    sentiment_parts = []
 
-### 市场情绪概况
-- 由于中文社交媒体情绪数据源暂未完全集成，当前提供基础分析
-- 建议关注雪球、东方财富、同花顺等平台的讨论热度
-- 港股市场还需关注香港本地财经媒体情绪
+                    # 1) 全市场综合评分
+                    try:
+                        guba = get_eastmoney_guba_sentiment(ticker)
+                        sentiment_parts.append(f"### 东方财富股吧综合评分\n{guba}")
+                    except Exception as e:
+                        sentiment_parts.append(f"### 东方财富股吧综合评分\n获取失败: {e}")
 
-### 情绪指标
-- 整体情绪: 中性
-- 讨论热度: 待分析
-- 投资者信心: 待评估
+                    # 2) 参与意愿（看涨看跌）
+                    try:
+                        desire = get_guba_desire_score(ticker)
+                        sentiment_parts.append(f"### 股吧参与意愿\n{desire}")
+                    except Exception as e:
+                        sentiment_parts.append(f"### 股吧参与意愿\n获取失败: {e}")
 
-*注：完整的中文社交媒体情绪分析功能正在开发中*
-"""
+                    # 3) 关注度
+                    try:
+                        focus = get_guba_focus_score(ticker)
+                        sentiment_parts.append(f"### 股吧关注度\n{focus}")
+                    except Exception as e:
+                        sentiment_parts.append(f"### 股吧关注度\n获取失败: {e}")
+
+                    # 4) 综合评分历史
+                    try:
+                        long_score = get_guba_long_score(ticker)
+                        sentiment_parts.append(f"### 股吧综合评分历史\n{long_score}")
+                    except Exception as e:
+                        sentiment_parts.append(f"### 股吧综合评分历史\n获取失败: {e}")
+
+                    # 5) 机构参与度
+                    try:
+                        inst = get_institutional_participation(ticker)
+                        sentiment_parts.append(f"### 机构参与度\n{inst}")
+                    except Exception as e:
+                        sentiment_parts.append(f"### 机构参与度\n获取失败: {e}")
+
+                    sentiment_summary = "\n\n".join(sentiment_parts)
                     result_data.append(sentiment_summary)
                 except Exception as e:
                     result_data.append(f"## 中文市场情绪\n获取失败: {e}")

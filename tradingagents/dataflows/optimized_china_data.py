@@ -1405,13 +1405,104 @@ class OptimizedChinaDataProvider:
             else:
                 metrics["net_margin"] = "N/A"
 
-            # 计算 PE/PB - 优先使用实时计算，降级到静态数据
+            # 计算 PE/PB - 降级链（按数据准确性从高到低）
             # 同时获取 PE 和 PE_TTM 两个指标
             pe_value = None
             pe_ttm_value = None
             pb_value = None
             is_loss_stock = False  # 🔥 标记是否为亏损股
+            # 修复：_parse_mongodb_financial_data 没有 symbol 参数，从 financial_data 取
+            code6 = (
+                financial_data.get("code")
+                or financial_data.get("symbol", "").replace(".SZ", "").replace(".SH", "")
+            ).zfill(6) if (
+                financial_data.get("code") or financial_data.get("symbol")
+            ) else ""
 
+            # 🔥 第 1 层：stock_basic_info 静态（Tushare daily_basic 官方静态）— 最准
+            pe_static = latest_indicators.get('pe')
+            pe_ttm_static = latest_indicators.get('pe_ttm')
+            pb_static = latest_indicators.get('pb')
+            if pe_ttm_static is not None and pe_ttm_static > 0 and str(pe_ttm_static) != 'nan' and pe_ttm_static != '--':
+                pe_ttm_value = float(pe_ttm_static)
+                metrics["pe_ttm"] = f"{pe_ttm_value:.2f}倍"
+                logger.info(f"✅ [PE_TTM-第1层成功] 来自 stock_basic_info: {pe_ttm_value}倍")
+            if pe_static is not None and pe_static > 0 and str(pe_static) != 'nan' and pe_static != '--':
+                pe_value = float(pe_static)
+                metrics["pe"] = f"{pe_value:.2f}倍"
+                logger.info(f"✅ [PE-第1层成功] 来自 stock_basic_info: {pe_value}倍")
+            if pb_static is not None and pb_static > 0 and str(pb_static) != 'nan' and pb_static != '--':
+                pb_value = float(pb_static)
+                metrics["pb"] = f"{pb_value:.2f}倍"
+                logger.info(f"✅ [PB-第1层成功] 来自 stock_basic_info: {pb_value}倍")
+
+            # 🔥 第 2 层：BaoStock（独立数据源、含 PE/PB）
+            if not metrics.get("pe") or not metrics.get("pb"):
+                try:
+                    baostock_metrics = self._get_baostock_pe_pb(code6)
+                    if baostock_metrics:
+                        if not metrics.get("pe") and baostock_metrics.get("pe"):
+                            pe_value = baostock_metrics["pe"]
+                            metrics["pe"] = f"{pe_value:.2f}倍"
+                            logger.info(f"✅ [PE-第2层成功] 来自 BaoStock: {pe_value}倍")
+                        if not metrics.get("pe_ttm") and baostock_metrics.get("pe_ttm"):
+                            pe_ttm_value = baostock_metrics["pe_ttm"]
+                            metrics["pe_ttm"] = f"{pe_ttm_value:.2f}倍"
+                            logger.info(f"✅ [PE_TTM-第2层成功] 来自 BaoStock: {pe_ttm_value}倍")
+                        if not metrics.get("pb") and baostock_metrics.get("pb"):
+                            pb_value = baostock_metrics["pb"]
+                            metrics["pb"] = f"{pb_value:.2f}倍"
+                            logger.info(f"✅ [PB-第2层成功] 来自 BaoStock: {pb_value}倍")
+                except Exception as e:
+                    logger.warning(f"⚠️ [BaoStock-第2层异常] {e}")
+
+            # 🔥 第 3 层：腾讯 qt.gtimg（轻量级、含 PE_TTM/PB）
+            if not metrics.get("pe_ttm") or not metrics.get("pb"):
+                try:
+                    from tradingagents.dataflows.providers.china.eastmoney_quote import TencentQuoteProvider
+                    tx_quote = TencentQuoteProvider.get_market_value(code6)
+                    if tx_quote:
+                        if not metrics.get("pe_ttm") and tx_quote.get("pe_ttm"):
+                            pe_ttm_value = tx_quote["pe_ttm"]
+                            metrics["pe_ttm"] = f"{pe_ttm_value:.2f}倍"
+                            logger.info(f"✅ [PE_TTM-第3层成功] 来自 Tencent: {pe_ttm_value}倍")
+                        if not metrics.get("pb") and tx_quote.get("pb"):
+                            pb_value = tx_quote["pb"]
+                            metrics["pb"] = f"{pb_value:.2f}倍"
+                            logger.info(f"✅ [PB-第3层成功] 来自 Tencent: {pb_value}倍")
+                except Exception as e:
+                    logger.warning(f"⚠️ [Tencent-第3层异常] {e}")
+
+            # 🔥 第 4 层：东财 push2（可能被风控、含动态 PE/PB）
+            if not metrics.get("pe") or not metrics.get("pb"):
+                try:
+                    from tradingagents.dataflows.providers.china.eastmoney_quote import EastMoneyQuoteProvider
+                    em_quote = EastMoneyQuoteProvider.get_market_value(code6)
+                    if em_quote:
+                        if not metrics.get("pe") and em_quote.get("pe_dynamic"):
+                            pe_value = em_quote["pe_dynamic"]
+                            metrics["pe"] = f"{pe_value:.2f}倍"
+                            logger.info(f"✅ [PE-第4层成功] 来自 EastMoney: {pe_value}倍")
+                        if not metrics.get("pb") and em_quote.get("pb"):
+                            pb_value = em_quote["pb"]
+                            metrics["pb"] = f"{pb_value:.2f}倍"
+                            logger.info(f"✅ [PB-第4层成功] 来自 EastMoney: {pb_value}倍")
+                except Exception as e:
+                    logger.warning(f"⚠️ [EastMoney-第4层异常] {e}")
+
+            # 如果前 4 层都拿到了 PE/PB，提前返回（避免被后续降级逻辑重写）
+            if metrics.get("pe") and metrics.get("pe_ttm") and metrics.get("pb"):
+                logger.info(f"✅ [PE/PB] 前 4 层完整命中，跳过 MongoDB 动态计算和后续降级")
+                return metrics
+            elif metrics.get("pe") and metrics.get("pe_ttm") and not metrics.get("pb"):
+                logger.info(f"⚠️ [PE/PB] PE/PE_TTM 已拿到，PB 缺失，继续 MongoDB 动态补 PB")
+            elif not metrics.get("pe") and not metrics.get("pe_ttm") and metrics.get("pb"):
+                logger.info(f"⚠️ [PE/PB] PB 已拿到，PE 缺失，继续 MongoDB 动态补 PE")
+            else:
+                logger.info(f"⚠️ [PE/PB] 前 4 层不完整，降级到 MongoDB 动态计算")
+
+            # 🔥 第 5 层（兜底）：MongoDB 动态计算（实时股价 × TTM 净利润）
+            # 注意：依赖 TTM 季度数据，对亏损股/重组股不可靠，仅作为最后兜底
             try:
                 # 优先使用实时计算
                 from tradingagents.dataflows.realtime_metrics import get_pe_pb_with_fallback
@@ -1421,7 +1512,7 @@ class OptimizedChinaDataProvider:
                 if db_manager.is_mongodb_available():
                     client = db_manager.get_mongodb_client()
                     # 从symbol中提取股票代码
-                    stock_code = latest_indicators.get('code') or latest_indicators.get('symbol', '').replace('.SZ', '').replace('.SH', '')
+                    stock_code = code6 or latest_indicators.get('code') or latest_indicators.get('symbol', '').replace('.SZ', '').replace('.SH', '')
 
                     logger.info(f"📊 [PE计算] 开始计算股票 {stock_code} 的PE/PB")
 
@@ -1514,8 +1605,36 @@ class OptimizedChinaDataProvider:
                         metrics["total_mv"] = f"{total_mv_yi:.2f}亿元"
                         logger.info(f"✅ [总市值-第3层成功] 总市值={total_mv_yi:.2f}亿元 (从money_cap转换)")
                     else:
-                        metrics["total_mv"] = "N/A"
-                        logger.warning(f"⚠️ [总市值-全部失败] 无可用总市值数据")
+                        # 🔥 第 4 层：腾讯 qt.gtimg 兜底（轻量级、稳定、含市值/PE/PB）
+                        try:
+                            from tradingagents.dataflows.providers.china.eastmoney_quote import TencentQuoteProvider
+                            tx_quote = TencentQuoteProvider.get_market_value(symbol)
+                            if tx_quote and tx_quote.get("total_mv", 0) > 0:
+                                metrics["total_mv"] = f"{tx_quote['total_mv']:.2f}亿元 (实时)"
+                                if tx_quote.get("pe_ttm"):
+                                    metrics["pe_ttm_fallback"] = f"{tx_quote['pe_ttm']:.2f}倍"
+                                if tx_quote.get("pb"):
+                                    metrics["pb_fallback"] = f"{tx_quote['pb']:.2f}倍"
+                                if tx_quote.get("price"):
+                                    metrics["price_fallback"] = f"{tx_quote['price']:.2f}元"
+                                logger.info(f"✅ [总市值-第4层成功] 来源=Tencent qt.gtimg: {tx_quote['total_mv']:.2f}亿元")
+                            else:
+                                # 🔥 第 5 层：东财 push2 兜底（可能被风控）
+                                from tradingagents.dataflows.providers.china.eastmoney_quote import EastMoneyQuoteProvider
+                                em_quote = EastMoneyQuoteProvider.get_market_value(symbol)
+                                if em_quote and em_quote.get("total_mv", 0) > 0:
+                                    metrics["total_mv"] = f"{em_quote['total_mv']:.2f}亿元 (实时)"
+                                    if em_quote.get("pb"):
+                                        metrics["pb_fallback"] = f"{em_quote['pb']:.2f}倍"
+                                    if em_quote.get("total_share"):
+                                        metrics["total_share"] = f"{em_quote['total_share']:.2f}亿股"
+                                    logger.info(f"✅ [总市值-第5层成功] 来源=EastMoney push2: {em_quote['total_mv']:.2f}亿元")
+                                else:
+                                    metrics["total_mv"] = "N/A"
+                                    logger.warning(f"⚠️ [总市值-全部失败] 腾讯/东财兜底均失败")
+                        except Exception as e:
+                            metrics["total_mv"] = "N/A"
+                            logger.warning(f"⚠️ [总市值-兜底异常] {e}")
 
             # 如果实时计算失败，尝试传统计算方式
             if pe_value is None:

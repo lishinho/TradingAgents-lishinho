@@ -17,6 +17,13 @@ def create_research_manager(llm, memory):
         news_report = state["news_report"]
         fundamentals_report = state["fundamentals_report"]
 
+        # 🔥 2026-06-14: 社交媒体情绪数据缺失哨兵
+        if not sentiment_report or len(sentiment_report.strip()) < 50:
+            sentiment_report = "（⚠️ 社交媒体情绪数据缺失：用户在本次分析中未选择 Social Analyst。辩论双方请勿臆测情绪倾向，并基于其他报告维度展开论证。）"
+            logger.warning(
+                f"⚠️ [研究经理] sentiment_report 为空，注入缺失哨兵（ticker={ticker}）"
+            )
+
         investment_debate_state = state["investment_debate_state"]
 
         curr_situation = f"{market_research_report}\n\n{sentiment_report}\n\n{news_report}\n\n{fundamentals_report}"

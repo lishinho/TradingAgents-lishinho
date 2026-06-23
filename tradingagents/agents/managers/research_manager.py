@@ -1,5 +1,4 @@
 import time
-import json
 
 # 导入统一日志系统
 from tradingagents.utils.logging_init import get_logger
@@ -27,6 +26,36 @@ def create_research_manager(llm, memory):
         investment_debate_state = state["investment_debate_state"]
 
         curr_situation = f"{market_research_report}\n\n{sentiment_report}\n\n{news_report}\n\n{fundamentals_report}"
+
+        # 🔥 2026-06-14: 量化评分缺失哨兵 + 动态检测
+        # 背景：600926 报告（standard 模式）不含「数据质量验证 & 量化评分」段，
+        # 但旧提示词硬编码"基本面报告末尾附带了量化评分表格"，诱导 LLM 幻觉编造
+        # PE/PB "较高" 评分 + "PE可能失真" 警告，导致最终决策与真实数据方向相反。
+        # 修复：动态扫描 fundamentals_report 是否含评分段关键字，
+        #       含则附加评分指引，不含则注入缺失哨兵并禁止 LLM 臆造。
+        has_quant_scoring = any(
+            marker in fundamentals_report
+            for marker in (
+                "量化评分总计",
+                "量化评分（0-100）",
+                "数据质量验证 & 量化评分",
+            )
+        )
+        quant_scoring_guidance = (
+            "基本面报告末尾的「数据质量验证 & 量化评分」表格已包含 PE/PB/ROE/负债等"
+            "因子的量化得分（0-100 分），请参考该评分作为辅助基准；同时留意数据质量"
+            "提示（如 TTM 失真、年报参考等）。"
+            if has_quant_scoring
+            else "（⚠️ 基本面报告未包含量化评分表：用户选择 standard 模式时不会附加。"
+            "**严禁凭空捏造 PE/PB/ROE 评分或「PE 失真」等数据质量警告**。"
+            "如需引用估值/质量判断，请直接引用上方基本面报告中的具体数字，如："
+            "PE=X.XX 倍、PB=X.XX 倍、ROE=X%、负债率=X%。）"
+        )
+        if not has_quant_scoring:
+            logger.warning(
+                f"⚠️ [研究经理] fundamentals_report 未含「量化评分」段，"
+                f"注入缺失哨兵（ticker={ticker}）"
+            )
 
         # 安全检查：确保memory不为None
         if memory is not None:
@@ -57,7 +86,13 @@ def create_research_manager(llm, memory):
 - 价格目标的时间范围（1个月、3个月、6个月）
 💰 您必须提供具体的目标价格 - 不要回复"无法确定"或"需要更多信息"。
 
-⚠️ 决策辅助：基本面报告末尾附带了「数据质量验证 & 量化评分」表格，包含PE/PB/ROE/负债等因子的量化得分（0-100分）。请参考该评分作为辅助基准，同时留意数据质量提示（如"PE可能失真"等警告）。
+⚠️ 量化评分指引：
+{quant_scoring_guidance}
+
+🚨 估值判断铁律（防止幻觉）：
+- **必须**直接引用基本面报告中的具体数字（如 PE=5.80 倍、PB=0.81 倍、ROE=X%）
+- **禁止**捏造基本面报告未给出的"量化评分表"或"PE 失真"等数据质量警告
+- **禁止**把基本面报告中的"低估"反向写成"较高"或"高估"
 
 考虑您在类似情况下的过去错误。利用这些见解来完善您的决策制定，确保您在学习和改进。以对话方式呈现您的分析，就像自然说话一样，不使用特殊格式。
 

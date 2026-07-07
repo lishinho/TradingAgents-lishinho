@@ -499,11 +499,18 @@ class OptimizedChinaDataProvider:
 
 ## 💰 核心财务指标
 - **总市值**: {financial_estimates.get('total_mv', 'N/A')}
+- **流通市值**: {financial_estimates.get('circ_mv', 'N/A')}
 - **市盈率(PE)**: {financial_estimates.get('pe', 'N/A')}
 - **市盈率TTM(PE_TTM)**: {financial_estimates.get('pe_ttm', 'N/A')}
 - **市净率(PB)**: {financial_estimates.get('pb', 'N/A')}
 - **净资产收益率(ROE)**: {financial_estimates.get('roe', 'N/A')}
 - **资产负债率**: {financial_estimates.get('debt_ratio', 'N/A')}
+
+## 📊 行业相对估值（广发证券）
+- **PE 行业均值**: {financial_estimates.get('pe_industry_avg', 'N/A')}
+- **PE 历史百分位**: {financial_estimates.get('pe_percentile', 'N/A')}
+- **PB 行业均值**: {financial_estimates.get('pb_industry_avg', 'N/A')}
+- **PB 历史百分位**: {financial_estimates.get('pb_percentile', 'N/A')}
 
 ## 💡 基础评估
 - **基本面评分**: {financial_estimates.get('fundamental_score', 'N/A')}/10
@@ -532,11 +539,18 @@ class OptimizedChinaDataProvider:
 
 ### 估值指标
 - **总市值**: {financial_estimates.get('total_mv', 'N/A')}
+- **流通市值**: {financial_estimates.get('circ_mv', 'N/A')}
 - **市盈率(PE)**: {financial_estimates.get('pe', 'N/A')}
 - **市盈率TTM(PE_TTM)**: {financial_estimates.get('pe_ttm', 'N/A')}
 - **市净率(PB)**: {financial_estimates.get('pb', 'N/A')}
 - **市销率(PS)**: {financial_estimates.get('ps', 'N/A')}
 - **股息收益率**: {financial_estimates.get('dividend_yield', 'N/A')}
+
+### 行业相对估值（广发证券）
+- **PE 行业均值**: {financial_estimates.get('pe_industry_avg', 'N/A')}
+- **PE 历史百分位**: {financial_estimates.get('pe_percentile', 'N/A')}
+- **PB 行业均值**: {financial_estimates.get('pb_industry_avg', 'N/A')}
+- **PB 历史百分位**: {financial_estimates.get('pb_percentile', 'N/A')}
 
 ### 盈利能力指标
 - **净资产收益率(ROE)**: {financial_estimates.get('roe', 'N/A')}
@@ -591,11 +605,18 @@ class OptimizedChinaDataProvider:
 
 ### 估值指标
 - **总市值**: {financial_estimates.get('total_mv', 'N/A')}
+- **流通市值**: {financial_estimates.get('circ_mv', 'N/A')}
 - **市盈率(PE)**: {financial_estimates.get('pe', 'N/A')}
 - **市盈率TTM(PE_TTM)**: {financial_estimates.get('pe_ttm', 'N/A')}
 - **市净率(PB)**: {financial_estimates.get('pb', 'N/A')}
 - **市销率(PS)**: {financial_estimates.get('ps', 'N/A')}
 - **股息收益率**: {financial_estimates.get('dividend_yield', 'N/A')}
+
+### 行业相对估值（广发证券）
+- **PE 行业均值**: {financial_estimates.get('pe_industry_avg', 'N/A')}
+- **PE 历史百分位**: {financial_estimates.get('pe_percentile', 'N/A')}
+- **PB 行业均值**: {financial_estimates.get('pb_industry_avg', 'N/A')}
+- **PB 历史百分位**: {financial_estimates.get('pb_percentile', 'N/A')}
 
 ### 盈利能力指标
 - **净资产收益率(ROE)**: {financial_estimates.get('roe', 'N/A')}
@@ -1043,22 +1064,55 @@ class OptimizedChinaDataProvider:
         # 股价有效，继续正常流程
         logger.info(f"📊 [股价验证通过] {symbol} 股价: {price_value}元")
 
-        # 🔥 修复：即使股价有效，也优先从BaoStock获取PE/PB数据
-        # 因为AKShare/MongoDB获取财务数据可能失败，导致PE/PB计算错误
-        logger.info(f"🔍 [PE/PB优化] 股价有效，但优先从BaoStock获取PE/PB数据以确保准确性")
+        # 🔥 开关：BaoStock 早返回 vs 完整路径
+        # - False（默认）：股价有效时不立即返回，继续走 _get_real_financial_metrics 拿三表和市值，
+        #   最后用 BaoStock 数据补/覆盖 PE/PB。这样能在保留 PE/PB 准确性的同时拿到完整财报数据。
+        # - True：旧行为，BaoStock 命中就立即返回（无财报数据，仅 PE/PB + 市值）。
+        BAOSTOCK_FAST_RETURN = False
+
+        # 先尝试 BaoStock 拿 PE/PB（准确性高）
+        logger.info(f"🔍 [PE/PB优化] 股价有效，优先从BaoStock获取PE/PB数据以确保准确性")
         baostock_metrics = self._get_baostock_pe_pb(symbol)
         if baostock_metrics:
             logger.info(f"✅ [BaoStock] 获取成功: {symbol} PE={baostock_metrics['pe']}, PB={baostock_metrics['pb']}")
-            
-            # 返回BaoStock的PE/PB数据
-            return baostock_metrics
-        
-        # 如果BaoStock也失败，尝试原有的财务数据获取逻辑
-        logger.warning(f"⚠️ [PE/PB优化] BaoStock获取失败，尝试AKShare获取财务数据")
-        real_metrics = self._get_real_financial_metrics(symbol, price_value)
-        if real_metrics:
-            logger.info(f"✅ 使用真实财务数据: {symbol}")
-            return real_metrics
+
+            # 旧行为：BaoStock 命中立即返回（无财报数据）
+            if BAOSTOCK_FAST_RETURN:
+                logger.info(f"⚡ [BaoStock-快路径] BAOSTOCK_FAST_RETURN=True，直接返回 BaoStock 数据")
+                return baostock_metrics
+
+            # 新行为：继续走完整路径，拿三表和其他指标
+            logger.info(f"🔄 [BaoStock-完整路径] 股价有效，继续走 _get_real_financial_metrics 拿三表和市值")
+            real_metrics = self._get_real_financial_metrics(symbol, price_value)
+            if real_metrics:
+                # 用 BaoStock 的 PE/PE_TTM/PB 覆盖（准确性更高），保留 real_metrics 的其他字段
+                # real_metrics 里如果已经有 total_mv/circ_mv 也保留（除非 BaoStock 路径已补）
+                logger.info(f"✅ [BaoStock-合并] 使用 BaoStock PE/PB 覆盖，保留 real_metrics 的财报数据")
+                real_metrics['pe'] = baostock_metrics['pe']
+                real_metrics['pe_ttm'] = baostock_metrics['pe_ttm']
+                real_metrics['pb'] = baostock_metrics['pb']
+                # 如果 real_metrics 没有市值字段，用 BaoStock 路径已补的市值
+                if 'total_mv' not in real_metrics and 'total_mv' in baostock_metrics:
+                    real_metrics['total_mv'] = baostock_metrics['total_mv']
+                if 'circ_mv' not in real_metrics and 'circ_mv' in baostock_metrics:
+                    real_metrics['circ_mv'] = baostock_metrics['circ_mv']
+                # 标注 PE/PB 数据来源
+                real_metrics['pe_pb_source'] = 'BaoStock'
+                # 保留 BaoStock 的分析日期（更准确）
+                if baostock_metrics.get('analysis_date'):
+                    real_metrics['analysis_date'] = baostock_metrics['analysis_date']
+                return real_metrics
+            else:
+                # 完整路径失败，回退到 BaoStock 数据（已含市值）
+                logger.warning(f"⚠️ [BaoStock-完整路径] _get_real_financial_metrics 失败，回退到 BaoStock 数据")
+                return baostock_metrics
+        else:
+            # BaoStock 失败，走原有财务数据获取逻辑
+            logger.warning(f"⚠️ [PE/PB优化] BaoStock获取失败，尝试AKShare获取财务数据")
+            real_metrics = self._get_real_financial_metrics(symbol, price_value)
+            if real_metrics:
+                logger.info(f"✅ 使用真实财务数据: {symbol}")
+                return real_metrics
 
         # 如果无法获取真实数据，抛出异常
         error_msg = f"无法获取股票 {symbol} 的财务数据。已尝试所有数据源（MongoDB、AKShare、BaoStock）均失败。"
@@ -1138,11 +1192,46 @@ class OptimizedChinaDataProvider:
                     return None
                 
                 logger.info(f"✅ [BaoStock] 获取成功: {symbol} 日期={date}, 股价={price}元, PE_TTM={pe_ttm:.2f}, PB={pb:.2f}")
-                
+
                 # 计算基本面评分
                 fundamental_score = self._calculate_pe_pb_score(pe_ttm, pb)
-                
-                return {
+
+                # 🔥 方案A：补总市值/流通市值（BaoStock 不返回市值字段，调东财 push2 一次拿两个字段）
+                # 东财 push2 接口字段：f117=总市值（元），f85=流通市值（元）
+                market_value_data = None
+                try:
+                    from .providers.china.eastmoney_quote import EastMoneyQuoteProvider
+                    market_value_data = EastMoneyQuoteProvider.get_market_value(symbol)
+                    if market_value_data:
+                        logger.info(
+                            f"✅ [BaoStock-补市值] 来源=EastMoney push2: "
+                            f"总市值={market_value_data.get('total_mv')}亿元, "
+                            f"流通市值={market_value_data.get('circ_mv')}亿元"
+                        )
+                    else:
+                        logger.warning(f"⚠️ [BaoStock-补市值] EastMoney push2 未返回数据: {symbol}")
+                except Exception as mv_e:
+                    logger.warning(f"⚠️ [BaoStock-补市值] 获取市值失败: {mv_e}")
+
+                # 🔥 广发 Skills 接口：补行业相对估值字段（PE/PB 行业均值、历史百分位）+ 总市值优先层
+                # 广发返回的 total_mv 准确度高于东财 push2，作为市值的优先来源
+                gf_valuation = None
+                try:
+                    from .providers.china.gf_quote import GFQuoteProvider
+                    gf_valuation = GFQuoteProvider.get_valuation(symbol)
+                    if gf_valuation:
+                        logger.info(
+                            f"✅ [广发-估值] {symbol}: 总市值={gf_valuation.get('total_mv')}亿元, "
+                            f"PE_TTM={gf_valuation.get('pe_ttm')}, PE行业均值={gf_valuation.get('pe_ttm_avg')}, "
+                            f"PE百分位={gf_valuation.get('pe_ttm_percent')}%, PB={gf_valuation.get('pb')}, "
+                            f"PB行业均值={gf_valuation.get('pb_avg')}, PB百分位={gf_valuation.get('pb_percent')}%"
+                        )
+                    else:
+                        logger.warning(f"⚠️ [广发-估值] 未返回数据: {symbol}")
+                except Exception as gf_e:
+                    logger.warning(f"⚠️ [广发-估值] 获取失败: {gf_e}")
+
+                result = {
                     'pe': f"{pe_ttm:.1f}倍",
                     'pe_ttm': f"{pe_ttm:.1f}倍",
                     'pb': f"{pb:.2f}倍",
@@ -1153,7 +1242,41 @@ class OptimizedChinaDataProvider:
                     'analysis_date': date,
                     'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                 }
-                
+
+                # 合并市值字段：广发优先，东财兜底
+                # 1) 总市值：广发 > 东财
+                if gf_valuation and gf_valuation.get('total_mv') and gf_valuation['total_mv'] > 0:
+                    result['total_mv'] = f"{gf_valuation['total_mv']:.2f}亿元 (广发)"
+                elif market_value_data and market_value_data.get('total_mv') and market_value_data['total_mv'] > 0:
+                    result['total_mv'] = f"{market_value_data['total_mv']:.2f}亿元 (实时)"
+
+                # 2) 流通市值：广发不提供，只用东财
+                if market_value_data:
+                    circ_mv = market_value_data.get('circ_mv')
+                    if circ_mv is not None and circ_mv > 0:
+                        result['circ_mv'] = f"{circ_mv:.2f}亿元 (实时)"
+                    # 透传其他可用字段（供下游使用）
+                    if market_value_data.get('total_share'):
+                        result['total_share'] = f"{market_value_data['total_share']:.2f}亿股"
+
+                # 3) 行业相对估值字段（广发提供，当前完全缺失的新指标）
+                if gf_valuation:
+                    if gf_valuation.get('pe_ttm_avg') is not None:
+                        result['pe_industry_avg'] = f"{gf_valuation['pe_ttm_avg']:.2f}倍"
+                    if gf_valuation.get('pe_ttm_percent') is not None:
+                        result['pe_percentile'] = f"{gf_valuation['pe_ttm_percent']:.2f}%"
+                    if gf_valuation.get('pb_avg') is not None:
+                        result['pb_industry_avg'] = f"{gf_valuation['pb_avg']:.2f}倍"
+                    if gf_valuation.get('pb_percent') is not None:
+                        result['pb_percentile'] = f"{gf_valuation['pb_percent']:.2f}%"
+                    if gf_valuation.get('list_date'):
+                        result['list_date'] = gf_valuation['list_date']
+                    # 标注市值来源（便于追溯）
+                    if 'total_mv' in result and '(广发)' in result['total_mv']:
+                        result['market_value_source'] = 'GF-Skills'
+
+                return result
+
             finally:
                 bs.logout()
                 
@@ -1325,7 +1448,102 @@ class OptimizedChinaDataProvider:
         except Exception as e:
             logger.debug(f"获取{symbol}真实财务数据失败: {e}")
 
+        # 🔥 兜底：广发 Skills 工具2（compare_indicator_post）
+        # 当 MongoDB/AKShare/Tushare 三表全部失败时，用广发接口拿财务指标 5 大维度
+        # 优点：返回精炼的指标摘要，无需解析三表原始数据
+        # 限制：必须传2只股票，会用行业映射表选同业对比股
+        try:
+            from .providers.china.gf_quote import GFQuoteProvider
+            from datetime import datetime as _dt
+            # 根据当前月份选最近的报告期
+            now = _dt.now()
+            if now.month <= 4:
+                gf_year, gf_report_type = str(now.year - 1), 12  # 上一年年报
+            elif now.month <= 8:
+                gf_year, gf_report_type = str(now.year), 1  # 当年一季报
+            elif now.month <= 10:
+                gf_year, gf_report_type = str(now.year), 6  # 当年中报
+            else:
+                gf_year, gf_report_type = str(now.year), 9  # 当年三季报
+
+            logger.info(f"🔄 [广发-兜底] 三表全部失败，尝试用广发工具2获取 {symbol} 财务指标 (year={gf_year}, report_type={gf_report_type})")
+            gf_indicators = GFQuoteProvider.get_financial_indicators(symbol, gf_year, gf_report_type)
+            if gf_indicators:
+                logger.info(f"✅ [广发-兜底] 获取成功: {symbol}, 字段数={len(gf_indicators)}")
+                return self._parse_gf_financial_indicators(gf_indicators, price_value)
+            else:
+                logger.warning(f"⚠️ [广发-兜底] 未返回数据: {symbol}")
+        except Exception as gf_e:
+            logger.warning(f"⚠️ [广发-兜底] 获取财务指标失败: {gf_e}")
+
         return None
+
+    def _parse_gf_financial_indicators(self, gf_data: dict, price_value: float) -> dict:
+        """解析广发工具2返回的财务指标为 metrics 字典
+
+        广发返回的指标已经是精炼摘要，直接映射到现有 metrics 字段名。
+        """
+        metrics = {
+            'data_source': 'GF-Skills',
+            'price': f"¥{price_value:.2f}" if price_value else None,
+            'current_price_numeric': price_value,
+            'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        }
+
+        # 盈利能力
+        if gf_data.get('roe') is not None:
+            metrics['roe'] = f"{float(gf_data['roe']):.2f}%"
+        if gf_data.get('net_profit2totalincome') is not None:
+            metrics['net_margin'] = f"{float(gf_data['net_profit2totalincome']):.2f}%"
+        if gf_data.get('sale_gross_rate') is not None:
+            metrics['gross_margin'] = f"{float(gf_data['sale_gross_rate']):.2f}%"
+
+        # 资本结构/财务健康度
+        if gf_data.get('liablity2asset') is not None:
+            metrics['debt_ratio'] = f"{float(gf_data['liablity2asset']):.2f}%"
+        if gf_data.get('equity2asset') is not None:
+            metrics['equity_ratio'] = f"{float(gf_data['equity2asset']):.2f}%"
+        if gf_data.get('quick_ratio') is not None:
+            metrics['quick_ratio'] = f"{float(gf_data['quick_ratio']):.2f}"
+
+        # 现金流
+        if gf_data.get('cashflow_oper2income') is not None:
+            metrics['cashflow_income_ratio'] = f"{float(gf_data['cashflow_oper2income']):.2f}"
+        if gf_data.get('net_cashflow_oper2net_profit') is not None:
+            metrics['cashflow_profit_ratio'] = f"{float(gf_data['net_cashflow_oper2net_profit']):.2f}"
+        if gf_data.get('net_cashflow_oper_ps') is not None:
+            metrics['ocf_per_share'] = f"{float(gf_data['net_cashflow_oper_ps']):.2f}元"
+
+        # 成长性
+        if gf_data.get('operate_income_yoy') is not None:
+            metrics['revenue_yoy'] = f"{float(gf_data['operate_income_yoy']):.2f}%"
+        if gf_data.get('net_profit_yoy') is not None:
+            metrics['net_profit_yoy'] = f"{float(gf_data['net_profit_yoy']):.2f}%"
+        if gf_data.get('total_asset_yoy') is not None:
+            metrics['asset_yoy'] = f"{float(gf_data['total_asset_yoy']):.2f}%"
+        if gf_data.get('equity_growth_rate') is not None:
+            metrics['equity_yoy'] = f"{float(gf_data['equity_growth_rate']):.2f}%"
+
+        # 运营效率
+        if gf_data.get('inventory_turnover') is not None:
+            metrics['inventory_turnover'] = f"{float(gf_data['inventory_turnover']):.2f}次"
+        if gf_data.get('acctreceivable_turnover') is not None:
+            metrics['receivables_turnover'] = f"{float(gf_data['acctreceivable_turnover']):.2f}次"
+        if gf_data.get('totalasset_turnover') is not None:
+            metrics['asset_turnover'] = f"{float(gf_data['totalasset_turnover']):.2f}次"
+
+        # 其他
+        if gf_data.get('goodwill2equity') is not None:
+            metrics['goodwill_ratio'] = f"{float(gf_data['goodwill2equity']):.2f}%"
+        if gf_data.get('interest_coverage_ratio') is not None:
+            metrics['interest_coverage'] = f"{float(gf_data['interest_coverage_ratio']):.2f}"
+        if gf_data.get('end_date'):
+            metrics['report_date'] = gf_data['end_date']
+        if gf_data.get('peer_stock_name'):
+            metrics['peer_stock'] = gf_data['peer_stock_name']
+
+        logger.info(f"✅ [广发-解析] 解析完成，共 {len(metrics)} 个字段")
+        return metrics
 
     def _parse_mongodb_financial_data(self, financial_data: dict, price_value: float) -> dict:
         """解析 MongoDB 标准化的财务数据为指标"""

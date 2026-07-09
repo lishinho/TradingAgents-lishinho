@@ -15,15 +15,20 @@ class EastMoneyQuoteProvider:
         仅取 总市值/总股本，不动 PE/PB
         字段说明（东财 push2 接口）:
         f43  : 最新价 × 100
-        f117: 总市值（元）
-        f85 : 流通市值（元）
-        f162: 动态 PE × 100
-        f167: PB × 100
+        f57  : 股票代码
+        f58  : 股票名称
+        f85  : 流通市值（元）
+        f117 : 总市值（元）
+        f162 : 动态 PE × 100
+        f167 : PB × 100
+
+        注：东财 stock/get 接口的 f115 字段对个股查询不返回有效值（始终为0），
+            若需 PS 请用 clist 批量接口或自算。当前项目暂不使用 PS。
         """
         market_prefix = "1" if symbol.startswith(("6", "9")) else "0"
         secid = f"{market_prefix}.{symbol}"
         url = "https://push2.eastmoney.com/api/qt/stock/get"
-        params = {"secid": secid, "fields": "f43,f117,f85,f57,f58,f162,f167"}
+        params = {"secid": secid, "fields": "f43,f57,f58,f85,f117,f162,f167"}
         headers = {
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X) AppleWebKit/537.36",
             "Referer": "https://quote.eastmoney.com/",
@@ -65,6 +70,7 @@ class TencentQuoteProvider:
         字段（按实际返回顺序，2026-06 实测）:
         [3]  名称
         [39] PE_TTM（静态）
+        [44] 流通市值（亿元）← 2026-07 实测确认，东财 f85 不可靠，用此字段
         [45] 总市值（亿元）
         [46] PB（市净率）
         [52] 动态 PE
@@ -80,6 +86,7 @@ class TencentQuoteProvider:
             return {
                 "name": parts[1],
                 "price": float(parts[3]) if parts[3] else None,
+                "circ_mv": float(parts[44]) if parts[44] else None,
                 "total_mv": float(parts[45]) if parts[45] else None,
                 "pe_ttm": float(parts[39]) if parts[39] else None,
                 "pe_dynamic": float(parts[52]) if parts[52] else None,

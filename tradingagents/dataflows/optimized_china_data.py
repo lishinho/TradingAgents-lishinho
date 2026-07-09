@@ -1250,14 +1250,23 @@ class OptimizedChinaDataProvider:
                 elif market_value_data and market_value_data.get('total_mv') and market_value_data['total_mv'] > 0:
                     result['total_mv'] = f"{market_value_data['total_mv']:.2f}亿元 (实时)"
 
-                # 2) 流通市值：广发不提供，只用东财
-                if market_value_data:
-                    circ_mv = market_value_data.get('circ_mv')
-                    if circ_mv is not None and circ_mv > 0:
-                        result['circ_mv'] = f"{circ_mv:.2f}亿元 (实时)"
-                    # 透传其他可用字段（供下游使用）
-                    if market_value_data.get('total_share'):
-                        result['total_share'] = f"{market_value_data['total_share']:.2f}亿股"
+                # 2) 流通市值：东财 stock/get 的 f85 实测返回错误值（300750 返回 42.57亿，实际应≈15000亿）
+                #    改用腾讯 qt.gtimg 的 parts[44] 作为流通市值数据源（2026-07-09 实测验证准确）
+                from tradingagents.dataflows.providers.china.eastmoney_quote import TencentQuoteProvider
+                tencent_data = None
+                try:
+                    tencent_data = TencentQuoteProvider.get_market_value(symbol)
+                    if tencent_data and tencent_data.get('circ_mv'):
+                        circ_mv_tx = tencent_data['circ_mv']
+                        if circ_mv_tx > 0:
+                            result['circ_mv'] = f"{circ_mv_tx:.2f}亿元 (腾讯实时)"
+                            logger.info(f"✅ [BaoStock-补流通市值] 来源=Tencent parts[44]: 流通市值={circ_mv_tx:.2f}亿元")
+                except Exception as e_tx:
+                    logger.warning(f"⚠️ 腾讯获取流通市值失败: {e_tx}")
+
+                # 东财 total_share 仍可用（总股本数据不影响流通市值正确性）
+                if market_value_data and market_value_data.get('total_share'):
+                    result['total_share'] = f"{market_value_data['total_share']:.2f}亿股"
 
                 # 3) 行业相对估值字段（广发提供，当前完全缺失的新指标）
                 if gf_valuation:
@@ -1334,59 +1343,13 @@ class OptimizedChinaDataProvider:
         return round(total_score, 1)
 
     def _get_real_financial_metrics(self, symbol: str, price_value: float) -> dict:
-        """获取真实财务指标 - 优先使用数据库缓存，再使用API"""
+        """获取真实财务指标 - 直接走 API（MongoDB 缓存已禁用）"""
         try:
-            # 🔥 优先从 market_quotes 获取实时股价，替换传入的 price_value
-            from tradingagents.config.database_manager import get_database_manager
-            db_manager = get_database_manager()
-            db_client = None
+            # 🚫 项目策略：完全不用 MongoDB 缓存，直接走 API
+            #    传入的 price_value 来自 BaoStock 实时股价，已经是最新价，无需再查 market_quotes
+            logger.info(f"🔄 [跳过MongoDB] 直接从API获取{symbol}财务数据，股价: {price_value}元")
 
-            if db_manager.is_mongodb_available():
-                try:
-                    db_client = db_manager.get_mongodb_client()
-                    db = db_client['tradingagents']
-
-                    # 标准化股票代码为6位
-                    code6 = symbol.replace('.SH', '').replace('.SZ', '').zfill(6)
-
-                    # 从 market_quotes 获取实时股价
-                    quote = db.market_quotes.find_one({"code": code6})
-                    if quote and quote.get("close"):
-                        realtime_price = float(quote.get("close"))
-                        logger.info(f"✅ 从 market_quotes 获取实时股价: {code6} = {realtime_price}元 (原价格: {price_value}元)")
-                        price_value = realtime_price
-                    else:
-                        logger.info(f"⚠️ market_quotes 中未找到{code6}的实时股价，使用传入价格: {price_value}元")
-                except Exception as e:
-                    logger.warning(f"⚠️ 从 market_quotes 获取实时股价失败: {e}，使用传入价格: {price_value}元")
-            else:
-                logger.info(f"⚠️ MongoDB 不可用，使用传入价格: {price_value}元")
-
-            # 第一优先级：从 MongoDB stock_financial_data 集合获取标准化财务数据
-            from tradingagents.config.runtime_settings import use_app_cache_enabled
-            if use_app_cache_enabled(False):
-                logger.info(f"🔍 优先从 MongoDB stock_financial_data 集合获取{symbol}财务数据")
-
-                # 直接从 MongoDB 获取标准化的财务数据
-                from tradingagents.dataflows.cache.mongodb_cache_adapter import get_mongodb_cache_adapter
-                adapter = get_mongodb_cache_adapter()
-                financial_data = adapter.get_financial_data(symbol)
-
-                if financial_data:
-                    logger.info(f"✅ [财务数据] 从 stock_financial_data 集合获取{symbol}财务数据")
-                    # 解析 MongoDB 标准化的财务数据
-                    metrics = self._parse_mongodb_financial_data(financial_data, price_value)
-                    if metrics:
-                        logger.info(f"✅ MongoDB 财务数据解析成功，返回指标")
-                        return metrics
-                    else:
-                        logger.warning(f"⚠️ MongoDB 财务数据解析失败")
-                else:
-                    logger.info(f"🔄 MongoDB 未找到{symbol}财务数据，尝试从 AKShare API 获取")
-            else:
-                logger.info(f"🔄 数据库缓存未启用，直接从AKShare API获取{symbol}财务数据")
-
-            # 第二优先级：从AKShare API获取
+            # 第一优先级：从AKShare API获取
             from .providers.china.akshare import get_akshare_provider
             import asyncio
 
@@ -2016,12 +1979,15 @@ class OptimizedChinaDataProvider:
 
             if revenue_for_ps and revenue_for_ps > 0:
                 try:
-                    # 使用市值/营业收入计算PS
-                    money_cap = latest_indicators.get('money_cap')
-                    if money_cap and money_cap > 0:
-                        ps_calculated = money_cap / revenue_for_ps
+                    # 🔥 修复：money_cap 是"货币资金"不是"总市值"，PS = 总市值 / 营业收入
+                    # total_mv 单位是"亿元"，revenue 单位是"万元"，统一转为"元"
+                    total_mv_yi = latest_indicators.get('total_mv')
+                    if total_mv_yi and total_mv_yi > 0:
+                        total_mv_yuan = total_mv_yi * 1e8       # 亿元 → 元
+                        revenue_yuan = revenue_for_ps * 1e4      # 万元 → 元
+                        ps_calculated = total_mv_yuan / revenue_yuan
                         metrics["ps"] = f"{ps_calculated:.2f}倍"
-                        logger.debug(f"✅ 计算PS({revenue_type}): 市值{money_cap}万元 / 营业收入{revenue_for_ps}万元 = {metrics['ps']}")
+                        logger.debug(f"✅ 计算PS({revenue_type}): 总市值{total_mv_yi}亿元 / 营业收入{revenue_for_ps}万元 = {metrics['ps']}")
                     else:
                         metrics["ps"] = "N/A"
                 except (ValueError, TypeError, ZeroDivisionError):

@@ -512,6 +512,21 @@ class OptimizedChinaDataProvider:
 - **PB 行业均值**: {financial_estimates.get('pb_industry_avg', 'N/A')}
 - **PB 历史百分位**: {financial_estimates.get('pb_percentile', 'N/A')}
 
+## 📊 行业相对估值（申万一级）
+- **申万行业**: {financial_estimates.get('sw_industry_name', 'N/A')} ({financial_estimates.get('sw_industry_code', 'N/A')})
+- **申万行业 PE_TTM**: {financial_estimates.get('sw_industry_pe_ttm', 'N/A')}
+- **申万行业 PE_静态**: {financial_estimates.get('sw_industry_pe_static', 'N/A')}
+- **申万行业 PB**: {financial_estimates.get('sw_industry_pb', 'N/A')}
+- **申万行业股息率**: {financial_estimates.get('sw_industry_dividend_yield', 'N/A')}
+- **申万行业成份股数**: {financial_estimates.get('sw_industry_constituents', 'N/A')}
+
+{financial_estimates.get('sw_sub_industries_md', '')}
+
+> ⚠️ 广发行业 PE 可能包含异常 PE 子行业（如电力归到含光伏/新能源发电的全行业），请结合下方申万二级/三级子行业 PE 列表与可比公司列表综合判断行业基准是否合理
+
+## 📊 同行业可比公司 PE 列表
+{financial_estimates.get('peer_pe_list', 'N/A')}
+
 ## 💡 基础评估
 - **基本面评分**: {financial_estimates.get('fundamental_score', 'N/A')}/10
 - **风险等级**: {financial_estimates.get('risk_level', 'N/A')}
@@ -551,6 +566,21 @@ class OptimizedChinaDataProvider:
 - **PE 历史百分位**: {financial_estimates.get('pe_percentile', 'N/A')}
 - **PB 行业均值**: {financial_estimates.get('pb_industry_avg', 'N/A')}
 - **PB 历史百分位**: {financial_estimates.get('pb_percentile', 'N/A')}
+
+### 行业相对估值（申万一级）
+- **申万行业**: {financial_estimates.get('sw_industry_name', 'N/A')} ({financial_estimates.get('sw_industry_code', 'N/A')})
+- **申万行业 PE_TTM**: {financial_estimates.get('sw_industry_pe_ttm', 'N/A')}
+- **申万行业 PE_静态**: {financial_estimates.get('sw_industry_pe_static', 'N/A')}
+- **申万行业 PB**: {financial_estimates.get('sw_industry_pb', 'N/A')}
+- **申万行业股息率**: {financial_estimates.get('sw_industry_dividend_yield', 'N/A')}
+- **申万行业成份股数**: {financial_estimates.get('sw_industry_constituents', 'N/A')}
+
+{financial_estimates.get('sw_sub_industries_md', '')}
+
+> ⚠️ 广发行业 PE 可能包含异常 PE 子行业（如电力归到含光伏/新能源发电的全行业），请结合下方申万二级/三级子行业 PE 列表与可比公司列表综合判断行业基准是否合理
+
+### 同行业可比公司 PE 列表
+{financial_estimates.get('peer_pe_list', 'N/A')}
 
 ### 盈利能力指标
 - **净资产收益率(ROE)**: {financial_estimates.get('roe', 'N/A')}
@@ -1284,6 +1314,84 @@ class OptimizedChinaDataProvider:
                     if 'total_mv' in result and '(广发)' in result['total_mv']:
                         result['market_value_source'] = 'GF-Skills'
 
+                # 🔥 申万一级行业 PE 补充层：多源口径对比 + 同行业可比公司 PE 列表
+                # 广发行业 PE 口径可能包含异常 PE 子行业（如电力归到含光伏/新能源发电的全行业）
+                # 申万一级 31 个行业分类更稳定，成份股更纯
+                sub_industries = None  # 预初始化，避免内部 try 失败时引用未定义变量
+                try:
+                    sw_data = self._get_sw_industry_valuation(symbol)
+                    if sw_data:
+                        result['sw_industry_name'] = sw_data['industry_name']
+                        result['sw_industry_code'] = sw_data['industry_code']
+                        result['sw_industry_pe_ttm'] = f"{sw_data['pe_ttm']:.2f}倍"
+                        result['sw_industry_pe_static'] = f"{sw_data['pe_static']:.2f}倍"
+                        result['sw_industry_pb'] = f"{sw_data['pb']:.2f}倍"
+                        result['sw_industry_dividend_yield'] = f"{sw_data['dividend_yield']:.2f}%"
+                        result['sw_industry_constituents'] = sw_data['constituents']
+                        logger.info(
+                            f"✅ [申万-行业PE] {symbol}: 行业={sw_data['industry_name']}, "
+                            f"PE_TTM={sw_data['pe_ttm']:.2f}, PB={sw_data['pb']:.2f}, "
+                            f"股息率={sw_data['dividend_yield']:.2f}%, 成份股={sw_data['constituents']}"
+                        )
+
+                        # 🔥 申万二级/三级子行业 PE 多层口径
+                        # 申万一级"公用事业"过粗，二级"电力"PE_TTM≈18 才是合理基准
+                        # 三级"核力发电"PE_TTM≈21 是最精确的同业口径
+                        try:
+                            sub_industries = self._get_sw_sub_industries(
+                                sw_data['industry_code'], sw_data['industry_name']
+                            )
+                            if sub_industries:
+                                # 拼装 markdown 字符串给报告模板直接展示
+                                md_lines = []
+                                if sub_industries['level2_list']:
+                                    md_lines.append(f"**申万二级子行业（{sw_data['industry_name']} 下属）**")
+                                    md_lines.append("")
+                                    md_lines.append("| 行业代码 | 行业名称 | 成份股 | PE_TTM | PE_静态 | PB | 股息率 |")
+                                    md_lines.append("|:--------|:--------|:------:|:------:|:------:|:--:|:------:|")
+                                    for r in sub_industries['level2_list']:
+                                        md_lines.append(
+                                            f"| {r['code']} | {r['name']} | {r['constituents']} | "
+                                            f"{r['pe_ttm']:.2f} | {r['pe_static']:.2f} | {r['pb']:.2f} | {r['dividend_yield']:.2f}% |"
+                                        )
+                                    md_lines.append("")
+
+                                if sub_industries['level3_list_under_power']:
+                                    md_lines.append("**申万三级子行业（电力下属，最精确同业口径）**")
+                                    md_lines.append("")
+                                    md_lines.append("| 行业代码 | 行业名称 | 成份股 | PE_TTM | PE_静态 | PB | 股息率 |")
+                                    md_lines.append("|:--------|:--------|:------:|:------:|:------:|:--:|:------:|")
+                                    for r in sub_industries['level3_list_under_power']:
+                                        md_lines.append(
+                                            f"| {r['code']} | {r['name']} | {r['constituents']} | "
+                                            f"{r['pe_ttm']:.2f} | {r['pe_static']:.2f} | {r['pb']:.2f} | {r['dividend_yield']:.2f}% |"
+                                        )
+                                    md_lines.append("")
+                                    md_lines.append(
+                                        "> 💡 上述为申万二级 \"电力\" 下属的三级子行业 PE 列表，"
+                                        f"请结合个股所属细分行业（如 {symbol} 所属的核力/火力/水力/风力/光伏发电）"
+                                        "优先参照对应子行业 PE_TTM 作为同业基准"
+                                    )
+
+                                if md_lines:
+                                    result['sw_sub_industries_md'] = "\n".join(md_lines)
+                                    logger.info(
+                                        f"✅ [申万-多层] {symbol}: 二级子行业 {len(sub_industries['level2_list'])} 个, "
+                                        f"电力下属三级 {len(sub_industries['level3_list_under_power'])} 个"
+                                    )
+                        except Exception as sub_e:
+                            logger.warning(f"⚠️ [申万-二级/三级] 获取失败: {sub_e}")
+                except Exception as sw_e:
+                    logger.warning(f"⚠️ [申万-行业PE] 获取失败: {sw_e}")
+
+                # 🔥 同行业可比公司 PE 列表（让 LLM 自己判断行业基准是否合理）
+                try:
+                    peer_list_md = self._get_peer_pe_list(symbol)
+                    if peer_list_md:
+                        result['peer_pe_list'] = peer_list_md
+                except Exception as peer_e:
+                    logger.warning(f"⚠️ [可比公司PE列表] 获取失败: {peer_e}")
+
                 return result
 
             finally:
@@ -1295,6 +1403,325 @@ class OptimizedChinaDataProvider:
         except Exception as e:
             logger.error(f"❌ [BaoStock] 获取失败: {symbol}, 错误类型: {type(e).__name__}, 错误信息: {e}")
             return None
+
+    # 申万一级行业 → 同行业龙头股映射（用于"同行业可比公司 PE 列表"）
+    # 注：申万一级 31 个行业，这里只列常见行业的代表性龙头，其他行业按需扩展
+    _SW_INDUSTRY_PEERS = {
+        '801160.SI': ['600011', '600027', '600023', '600795', '601991', '601985'],  # 公用事业：华能/华电/浙能/国电/大唐/中国核电
+        '801780.SI': ['601398', '601939', '601288', '601988', '600036'],  # 银行
+        '801120.SI': ['600519', '000858', '600809', '000568', '002304'],  # 食品饮料（白酒）
+        '801790.SI': ['601318', '601628', '600030', '601688', '601601'],  # 非银金融
+        '801180.SI': ['000002', '600048', '001979', '600340', '600606'],  # 房地产
+        '801110.SI': ['000333', '600690', '000651', '002508', '600690'],  # 家用电器
+        '801150.SI': ['600276', '000538', '600436', '300015', '600085'],  # 医药生物
+        '801730.SI': ['300750', '002594', '601012', '002129', '600089'],  # 电力设备（新能源）
+        '801080.SI': ['688981', '603501', '002049', '600584', '300142'],  # 电子
+        '801880.SI': ['600104', '601238', '000625', '601633', '600006'],  # 汽车
+        '801050.SI': ['601899', '600547', '601898', '600489', '002460'],  # 有色金属
+        '801950.SI': ['601088', '600188', '601225', '600971', '600997'],  # 煤炭
+        '801960.SI': ['601857', '600028', '600585', '002493', '600346'],  # 石油石化
+        '801040.SI': ['600019', '600010', '000898', '600010', '000709'],  # 钢铁
+    }
+
+    def _get_sw_industry_valuation(self, symbol: str) -> Optional[dict]:
+        """获取个股所属申万一级行业的 PE/PB/股息率
+
+        实现：
+        1. 调用 ak.sw_index_first_info() 拿申万一级 31 个行业的 PE/PB 全表
+        2. 通过 ak.stock_individual_info_em 拿个股的"行业"字段（东财行业名）
+        3. 用 hardcoded 东财行业名 → 申万一级代码 映射表查找
+        4. 返回对应行业的 PE_TTM / PE_静态 / PB / 股息率 / 成份股个数
+
+        失败时返回 None（不影响现有数据）
+        """
+        import akshare as ak
+
+        # 1) 拿申万一级行业 PE 全表
+        try:
+            sw_df = ak.sw_index_first_info()
+        except Exception as e:
+            logger.warning(f"⚠️ [申万] sw_index_first_info 调用失败: {e}")
+            return None
+
+        if sw_df is None or len(sw_df) == 0:
+            return None
+
+        # 2) 拿个股行业（东财口径）
+        industry_name_em = None
+        for _ in range(2):
+            try:
+                info_df = ak.stock_individual_info_em(symbol=symbol)
+                if info_df is not None and len(info_df) > 0:
+                    row = info_df[info_df['item'] == '行业']
+                    if len(row) > 0:
+                        industry_name_em = str(row.iloc[0]['value']).strip()
+                        break
+            except Exception:
+                import time
+                time.sleep(0.5)
+            break
+
+        # 2.1) 兜底：东财接口失败时，用 hardcoded 反向映射表查申万行业
+        # 从 _SW_INDUSTRY_PEERS 反向构建"股票代码 → 申万一级代码"映射
+        sw_code_from_map = None
+        for sw_code, peer_list in self._SW_INDUSTRY_PEERS.items():
+            if symbol in peer_list:
+                sw_code_from_map = sw_code
+                break
+
+        # 如果东财接口失败但 hardcoded 映射命中，直接用 hardcoded 结果
+        if not industry_name_em and sw_code_from_map:
+            logger.info(f"[申万] 东财接口失败，用 hardcoded 映射: {symbol} → {sw_code_from_map}")
+            row = sw_df[sw_df['行业代码'] == sw_code_from_map]
+            if len(row) > 0:
+                r = row.iloc[0]
+                return {
+                    'industry_code': sw_code_from_map,
+                    'industry_name': str(r['行业名称']),
+                    'constituents': int(r['成份个数']),
+                    'pe_static': float(r['静态市盈率']) if r['静态市盈率'] is not None else 0.0,
+                    'pe_ttm': float(r['TTM(滚动)市盈率']) if r['TTM(滚动)市盈率'] is not None else 0.0,
+                    'pb': float(r['市净率']) if r['市净率'] is not None else 0.0,
+                    'dividend_yield': float(r['静态股息率']) if r['静态股息率'] is not None else 0.0,
+                }
+
+        if not industry_name_em:
+            logger.debug(f"[申万] 未拿到 {symbol} 的东财行业名，且不在 hardcoded 映射表里，跳过")
+            return None
+
+        # 3) 东财行业名 → 申万一级代码 映射
+        sw_code = self._map_em_industry_to_sw(industry_name_em, sw_df)
+        if not sw_code:
+            logger.debug(f"[申万] 东财行业 '{industry_name_em}' 未找到申万映射，跳过")
+            return None
+
+        # 4) 在申万全表里查对应行业
+        row = sw_df[sw_df['行业代码'] == sw_code]
+        if len(row) == 0:
+            return None
+        r = row.iloc[0]
+
+        return {
+            'industry_code': sw_code,
+            'industry_name': str(r['行业名称']),
+            'constituents': int(r['成份个数']),
+            'pe_static': float(r['静态市盈率']) if r['静态市盈率'] is not None else 0.0,
+            'pe_ttm': float(r['TTM(滚动)市盈率']) if r['TTM(滚动)市盈率'] is not None else 0.0,
+            'pb': float(r['市净率']) if r['市净率'] is not None else 0.0,
+            'dividend_yield': float(r['静态股息率']) if r['静态股息率'] is not None else 0.0,
+        }
+
+    def _get_sw_sub_industries(self, sw_level1_code: str, sw_level1_name: str) -> Optional[dict]:
+        """🔥 获取申万一级下所有二级子行业 + 电力子行业下的三级子行业 PE 多层口径
+
+        Args:
+            sw_level1_code: 申万一级代码，如 '801160.SI'
+            sw_level1_name: 申万一级名称，如 '公用事业'
+
+        Returns:
+            {
+                'level2_list': [{code, name, parent, constituents, pe_ttm, pe_static, pb, dividend_yield}, ...],
+                'level3_list_under_power': [{code, name, parent, constituents, pe_ttm, pe_static, pb, dividend_yield}, ...],
+            }
+            level3_list_under_power 是申万二级"电力"下属的所有三级子行业
+            (适用于电力股、热力股等公用事业子类)
+
+        失败时返回 None
+        """
+        import akshare as ak
+
+        result = {'level2_list': [], 'level3_list_under_power': []}
+
+        # 1) 拿申万二级行业全表
+        try:
+            sw2_df = ak.sw_index_second_info()
+        except Exception as e:
+            logger.warning(f"⚠️ [申万-二级] sw_index_second_info 调用失败: {e}")
+            return None
+
+        if sw2_df is None or len(sw2_df) == 0:
+            return None
+
+        # 2) 过滤出"上级行业=申万一级名称"的所有二级子行业
+        level2_rows = sw2_df[sw2_df['上级行业'] == sw_level1_name]
+        for _, r in level2_rows.iterrows():
+            result['level2_list'].append({
+                'code': str(r['行业代码']),
+                'name': str(r['行业名称']),
+                'parent': str(r['上级行业']),
+                'constituents': int(r['成份个数']) if r['成份个数'] is not None else 0,
+                'pe_static': float(r['静态市盈率']) if r['静态市盈率'] is not None else 0.0,
+                'pe_ttm': float(r['TTM(滚动)市盈率']) if r['TTM(滚动)市盈率'] is not None else 0.0,
+                'pb': float(r['市净率']) if r['市净率'] is not None else 0.0,
+                'dividend_yield': float(r['静态股息率']) if r['静态股息率'] is not None else 0.0,
+            })
+
+        # 3) 拿申万三级行业全表，过滤出"上级行业=电力"的所有三级子行业
+        # 电力股通常归申万二级"电力"下，包括：火电/水电/核电/风电/光伏/热力/其他能源发电/电能综合服务
+        try:
+            sw3_df = ak.sw_index_third_info()
+        except Exception as e:
+            logger.warning(f"⚠️ [申万-三级] sw_index_third_info 调用失败: {e}")
+            return result  # 二级数据已有，三级失败不影响
+
+        if sw3_df is None or len(sw3_df) == 0:
+            return result
+
+        # "电力"是申万二级下的固定名称
+        level3_rows = sw3_df[sw3_df['上级行业'] == '电力']
+        for _, r in level3_rows.iterrows():
+            result['level3_list_under_power'].append({
+                'code': str(r['行业代码']),
+                'name': str(r['行业名称']),
+                'parent': str(r['上级行业']),
+                'constituents': int(r['成份个数']) if r['成份个数'] is not None else 0,
+                'pe_static': float(r['静态市盈率']) if r['静态市盈率'] is not None else 0.0,
+                'pe_ttm': float(r['TTM(滚动)市盈率']) if r['TTM(滚动)市盈率'] is not None else 0.0,
+                'pb': float(r['市净率']) if r['市净率'] is not None else 0.0,
+                'dividend_yield': float(r['静态股息率']) if r['静态股息率'] is not None else 0.0,
+            })
+
+        return result
+
+    def _map_em_industry_to_sw(self, em_name: str, sw_df) -> Optional[str]:
+        """东财行业名 → 申万一级代码 映射
+
+        优先用名称包含匹配（如东财"电力行业" → 申万"公用事业"）
+        """
+        # 简化映射表：东财行业名关键词 → 申万一级代码
+        # 申万 31 个一级代码已通过 sw_index_first_info 拿到
+        keyword_map = {
+            '电力': '801160.SI',  # 公用事业
+            '燃气': '801160.SI',
+            '水务': '801160.SI',
+            '环保': '801160.SI',
+            '银行': '801780.SI',
+            '保险': '801790.SI',
+            '证券': '801790.SI',
+            '白酒': '801120.SI',
+            '食品': '801120.SI',
+            '饮料': '801120.SI',
+            '家电': '801110.SI',
+            '医药': '801150.SI',
+            '生物': '801150.SI',
+            '医疗': '801150.SI',
+            '电池': '801730.SI',
+            '光伏': '801730.SI',
+            '新能源': '801730.SI',
+            '半导体': '801080.SI',
+            '芯片': '801080.SI',
+            '电子': '801080.SI',
+            '汽车': '801880.SI',
+            '有色': '801050.SI',
+            '煤炭': '801950.SI',
+            '石油': '801960.SI',
+            '石化': '801960.SI',
+            '钢铁': '801040.SI',
+            '房地产': '801180.SI',
+            '地产': '801180.SI',
+            '计算机': '801750.SI',
+            '软件': '801750.SI',
+            '通信': '801770.SI',
+            '传媒': '801760.SI',
+            '军工': '801740.SI',
+            '国防': '801740.SI',
+            '农业': '801010.SI',
+            '化工': '801030.SI',
+            '建材': '801710.SI',
+            '建筑': '801720.SI',
+            '机械': '801890.SI',
+            '交通运输': '801170.SI',
+            '商贸': '801200.SI',
+            '社会服务': '801210.SI',
+            '纺织': '801130.SI',
+            '轻工': '801140.SI',
+            '美容': '801980.SI',
+            '环保': '801970.SI',
+        }
+
+        for kw, sw_code in keyword_map.items():
+            if kw in em_name:
+                return sw_code
+
+        # 兜底：直接在申万表里查名称完全匹配
+        row = sw_df[sw_df['行业名称'] == em_name]
+        if len(row) > 0:
+            return str(row.iloc[0]['行业代码'])
+
+        return None
+
+    def _get_peer_pe_list(self, symbol: str) -> Optional[str]:
+        """获取同行业可比公司 PE/PB 列表（markdown 字符串）
+
+        实现：
+        1. 先拿申万一级代码
+        2. 从 hardcoded 龙头股映射表拿同行业 3-5 只龙头
+        3. 对每只龙头调广发 API get_valuation 拿 PE_TTM / PB / 总市值
+        4. 组装成 markdown 表格字符串
+
+        失败时返回 None
+        """
+        # 1) 拿申万一级代码（复用 _get_sw_industry_valuation 的逻辑）
+        sw_data = self._get_sw_industry_valuation(symbol)
+        if not sw_data:
+            return None
+
+        sw_code = sw_data['industry_code']
+        sw_name = sw_data['industry_name']
+
+        # 2) 拿同行业龙头股
+        peer_codes = self._SW_INDUSTRY_PEERS.get(sw_code, [])
+        if not peer_codes:
+            logger.debug(f"[可比公司] 申万行业 {sw_code} 无龙头股映射，跳过")
+            return None
+
+        # 把目标股票本身也加进去
+        all_codes = [symbol] + [c for c in peer_codes if c != symbol]
+
+        # 3) 对每只调广发 API 拿估值
+        from .providers.china.gf_quote import GFQuoteProvider
+        rows = []
+        for code in all_codes:
+            try:
+                val = GFQuoteProvider.get_valuation(code)
+                if val:
+                    name = val.get('name') or code
+                    rows.append({
+                        'code': code,
+                        'name': name,
+                        'pe_ttm': val.get('pe_ttm'),
+                        'pb': val.get('pb'),
+                        'total_mv': val.get('total_mv'),
+                    })
+            except Exception:
+                continue
+
+        if not rows:
+            return None
+
+        # 4) 组装 markdown 表格
+        md_lines = [
+            f"**所属申万一级行业**: {sw_name} ({sw_code})，成份股 {sw_data['constituents']} 只",
+            "",
+            "| 代码 | 名称 | PE_TTM | PB | 总市值(亿) |",
+            "|:----|:----|:------:|:--:|:--------:|",
+        ]
+        for r in rows:
+            pe_str = f"{r['pe_ttm']:.2f}" if r['pe_ttm'] is not None else "N/A"
+            pb_str = f"{r['pb']:.2f}" if r['pb'] is not None else "N/A"
+            mv_str = f"{r['total_mv']:.1f}" if r['total_mv'] is not None else "N/A"
+            md_lines.append(f"| {r['code']} | {r['name']} | {pe_str} | {pb_str} | {mv_str} |")
+
+        # 加一行行业 PE 中位数
+        pe_vals = [r['pe_ttm'] for r in rows if r['pe_ttm'] is not None]
+        if pe_vals:
+            pe_sorted = sorted(pe_vals)
+            median_pe = pe_sorted[len(pe_sorted) // 2]
+            md_lines.append("")
+            md_lines.append(f"**同行业 PE_TTM 中位数**: {median_pe:.2f} 倍（含目标公司）")
+            md_lines.append(f"**申万行业 PE_TTM**: {sw_data['pe_ttm']:.2f} 倍")
+
+        return "\n".join(md_lines)
 
     def _calculate_pe_pb_score(self, pe_ttm: float, pb: float) -> float:
         """
@@ -1373,7 +1800,7 @@ class OptimizedChinaDataProvider:
                         logger.info(f"✅ AKShare解析成功，返回指标")
                         # 缓存原始财务数据到数据库（而不是解析后的指标）
                         self._cache_raw_financial_data(symbol, financial_data, stock_info)
-                        return metrics
+                        return self._supplement_with_gf_indicators(metrics, symbol)
                     else:
                         logger.warning(f"⚠️ AKShare解析失败，返回None")
                 else:
@@ -1406,7 +1833,7 @@ class OptimizedChinaDataProvider:
             if metrics:
                 # 缓存原始财务数据到数据库
                 self._cache_raw_financial_data(symbol, financial_data, stock_info)
-                return metrics
+                return self._supplement_with_gf_indicators(metrics, symbol)
 
         except Exception as e:
             logger.debug(f"获取{symbol}真实财务数据失败: {e}")
@@ -1418,24 +1845,59 @@ class OptimizedChinaDataProvider:
         try:
             from .providers.china.gf_quote import GFQuoteProvider
             from datetime import datetime as _dt
-            # 根据当前月份选最近的报告期
+            import time as _time
             now = _dt.now()
+            y = now.year
+            # 报告期 fallback 顺序：当年最近报告期 → 上一年年报 → 上一年三季报 → 上一年中报
+            # 注意：广发工具2 对未披露的报告期返回空，需要按顺序 fallback
+            report_periods = []
             if now.month <= 4:
-                gf_year, gf_report_type = str(now.year - 1), 12  # 上一年年报
+                report_periods.append((str(y - 1), 12))  # 上一年年报
             elif now.month <= 8:
-                gf_year, gf_report_type = str(now.year), 1  # 当年一季报
+                report_periods.append((str(y), 1))  # 当年一季报
+                report_periods.append((str(y - 1), 12))  # 兜底：上一年年报
             elif now.month <= 10:
-                gf_year, gf_report_type = str(now.year), 6  # 当年中报
+                report_periods.append((str(y), 6))  # 当年中报
+                report_periods.append((str(y), 1))  # 兜底：当年一季报
             else:
-                gf_year, gf_report_type = str(now.year), 9  # 当年三季报
+                report_periods.append((str(y), 9))  # 当年三季报
+                report_periods.append((str(y), 6))  # 兜底：当年中报
+            report_periods.append((str(y - 1), 12))  # 上一年年报
+            report_periods.append((str(y - 1), 9))  # 上一年三季报
 
-            logger.info(f"🔄 [广发-兜底] 三表全部失败，尝试用广发工具2获取 {symbol} 财务指标 (year={gf_year}, report_type={gf_report_type})")
-            gf_indicators = GFQuoteProvider.get_financial_indicators(symbol, gf_year, gf_report_type)
+            # 去重（保持顺序）
+            seen = set()
+            unique_periods = []
+            for p in report_periods:
+                if p not in seen:
+                    seen.add(p)
+                    unique_periods.append(p)
+
+            logger.info(f"🔄 [广发-兜底] 三表全部失败，尝试用广发工具2获取 {symbol} 财务指标 "
+                        f"(候选报告期: {unique_periods})")
+            gf_indicators = None
+            used_period = None
+            for gf_year, gf_report_type in unique_periods:
+                gf_indicators = GFQuoteProvider.get_financial_indicators(symbol, gf_year, gf_report_type)
+                if gf_indicators:
+                    used_period = (gf_year, gf_report_type)
+                    break
+                _time.sleep(0.2)
+
             if gf_indicators:
-                logger.info(f"✅ [广发-兜底] 获取成功: {symbol}, 字段数={len(gf_indicators)}")
-                return self._parse_gf_financial_indicators(gf_indicators, price_value)
+                rt_name = {1: '一季报', 6: '中报', 9: '三季报', 12: '年报'}.get(
+                    used_period[1] if used_period else None, '?'
+                )
+                logger.info(f"✅ [广发-兜底] 获取成功: {symbol}, "
+                            f"报告期: {used_period[0] if used_period else '?'} {rt_name}, "
+                            f"字段数={len(gf_indicators)}")
+                metrics = self._parse_gf_financial_indicators(gf_indicators, price_value)
+                if metrics and used_period:
+                    rt_name = {1: '一季报', 6: '中报', 9: '三季报', 12: '年报'}.get(used_period[1], '?')
+                    metrics['supplementary_source'] = f'GF-Skills compare_indicator_post ({used_period[0]} {rt_name})'
+                return metrics
             else:
-                logger.warning(f"⚠️ [广发-兜底] 未返回数据: {symbol}")
+                logger.warning(f"⚠️ [广发-兜底] 所有报告期均未返回数据: {symbol}")
         except Exception as gf_e:
             logger.warning(f"⚠️ [广发-兜底] 获取财务指标失败: {gf_e}")
 
@@ -1506,6 +1968,129 @@ class OptimizedChinaDataProvider:
             metrics['peer_stock'] = gf_data['peer_stock_name']
 
         logger.info(f"✅ [广发-解析] 解析完成，共 {len(metrics)} 个字段")
+        return metrics
+
+    def _supplement_with_gf_indicators(self, metrics: dict, symbol: str) -> dict:
+        """🔥 广发补充层：用广发工具2 补充 metrics 里缺失或 N/A 的财务字段
+
+        策略：
+        - 不覆盖 metrics 里已有的有效字段（非 N/A、非空）
+        - 只补充 metrics 里缺失或为 "N/A" 的字段
+        - 即使 AKShare/Tushare 已拿到部分数据，也调一次广发工具2 补齐缺失项
+
+        补充字段（来自广发 compare_indicator_post）：
+        - 盈利：roe / net_margin / gross_margin
+        - 资本结构：debt_ratio / equity_ratio / quick_ratio
+        - 现金流：cashflow_income_ratio / cashflow_profit_ratio / ocf_per_share
+        - 成长性：revenue_yoy / net_profit_yoy / asset_yoy / equity_yoy
+        - 运营效率：inventory_turnover / receivables_turnover / asset_turnover
+        - 其他：goodwill_ratio / interest_coverage / report_date / peer_stock
+        """
+        if not metrics:
+            return metrics
+
+        # 1) 收集 metrics 里缺失或 N/A 的字段
+        missing_keys = []
+        for k, v in metrics.items():
+            if v is None or v == "N/A" or v == "" or (isinstance(v, str) and v.strip() in ("N/A", "")):
+                missing_keys.append(k)
+
+        # 即使没有缺失字段，也尝试拿成长性/周转率等"现有 metrics 通常不包含"的字段
+        # 这些字段是广发工具2 独有的补充项，不在 AKShare/Tushare 解析结果里
+        gf_only_fields = [
+            'cashflow_income_ratio', 'cashflow_profit_ratio', 'ocf_per_share',
+            'revenue_yoy', 'net_profit_yoy', 'asset_yoy', 'equity_yoy',
+            'inventory_turnover', 'receivables_turnover', 'asset_turnover',
+            'goodwill_ratio', 'interest_coverage', 'report_date', 'peer_stock',
+        ]
+        for f in gf_only_fields:
+            if f not in metrics:
+                missing_keys.append(f)
+
+        if not missing_keys:
+            return metrics  # 无缺失，无需补充
+
+        # 2) 调广发工具2 拿补充数据
+        # 报告期 fallback 顺序：当年最近报告期 → 上一年年报 → 上一年三季报 → 上一年中报
+        try:
+            from .providers.china.gf_quote import GFQuoteProvider
+            from datetime import datetime as _dt
+            now = _dt.now()
+            y = now.year
+            # 按"最近披露"优先级排列：当年一季报 → 上一年年报 → 上一年三季报 → 上一年中报
+            # 注意：广发工具2 对未披露的报告期返回空，需要按顺序 fallback
+            report_periods = []
+            if now.month <= 4:
+                report_periods.append((str(y - 1), 12))  # 上一年年报
+            elif now.month <= 8:
+                report_periods.append((str(y), 1))  # 当年一季报
+                report_periods.append((str(y - 1), 12))  # 兜底：上一年年报
+            elif now.month <= 10:
+                report_periods.append((str(y), 6))  # 当年中报
+                report_periods.append((str(y), 1))  # 兜底：当年一季报
+            else:
+                report_periods.append((str(y), 9))  # 当年三季报
+                report_periods.append((str(y), 6))  # 兜底：当年中报
+            # 再加几个明确的 fallback
+            report_periods.append((str(y - 1), 12))  # 上一年年报
+            report_periods.append((str(y - 1), 9))  # 上一年三季报
+
+            # 去重（保持顺序）
+            seen = set()
+            unique_periods = []
+            for p in report_periods:
+                if p not in seen:
+                    seen.add(p)
+                    unique_periods.append(p)
+
+            gf_data = None
+            used_period = None
+            for gf_year, gf_report_type in unique_periods:
+                gf_data = GFQuoteProvider.get_financial_indicators(symbol, gf_year, gf_report_type)
+                if gf_data:
+                    used_period = (gf_year, gf_report_type)
+                    logger.debug(f"[广发-补充] {symbol} 命中报告期 year={gf_year}, report_type={gf_report_type}")
+                    break
+                # 节流，避免连续高频请求
+                import time as _time
+                _time.sleep(0.2)
+
+            if not gf_data:
+                logger.debug(f"[广发-补充] {symbol} 所有报告期均未返回数据，跳过补充")
+                return metrics
+
+            gf_metrics = self._parse_gf_financial_indicators(gf_data, 0.0)
+            if not gf_metrics:
+                return metrics
+
+            # 3) 只补充缺失或 N/A 的字段（不覆盖已有数据）
+            supplemented = 0
+            for k, v in gf_metrics.items():
+                if k in ('data_source', 'price', 'current_price_numeric', 'updated_at'):
+                    continue
+                # 当前 metrics 里该字段为空/N/A 或不存在 → 补充
+                current = metrics.get(k)
+                if current is None or current == "N/A" or current == "":
+                    if v is not None and v != "N/A" and v != "":
+                        metrics[k] = v
+                        supplemented += 1
+
+            if supplemented > 0:
+                # 标注实际命中的报告期（便于追溯）
+                if used_period:
+                    used_y, used_rt = used_period
+                    rt_name = {1: '一季报', 6: '中报', 9: '三季报', 12: '年报'}.get(used_rt, '?')
+                    metrics['supplementary_source'] = f'GF-Skills compare_indicator_post ({used_y} {rt_name})'
+                else:
+                    metrics['supplementary_source'] = 'GF-Skills compare_indicator_post'
+                logger.info(
+                    f"✅ [广发-补充] {symbol} 补充 {supplemented} 个缺失字段 "
+                    f"(报告期: {used_period}), "
+                    f"字段: {[k for k in gf_metrics if k in metrics and metrics[k] != 'N/A' and k not in ('data_source','price','updated_at','supplementary_source')][:8]}..."
+                )
+        except Exception as e:
+            logger.warning(f"⚠️ [广发-补充] {symbol} 补充失败: {e}")
+
         return metrics
 
     def _parse_mongodb_financial_data(self, financial_data: dict, price_value: float) -> dict:

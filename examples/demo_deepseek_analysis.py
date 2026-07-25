@@ -52,7 +52,7 @@ def demo_simple_chat():
         
         # 创建DeepSeek模型
         llm = create_deepseek_direct_adapter(
-            model="deepseek-chat",
+            model="deepseek-v4-flash",
             temperature=0.1,
             max_tokens=500
         )
@@ -85,7 +85,7 @@ def demo_reasoning_analysis():
         
         # 创建DeepSeek适配器
         adapter = create_deepseek_direct_adapter(
-            model="deepseek-chat",
+            model="deepseek-v4-flash",
             temperature=0.1,
             max_tokens=1000
         )
@@ -149,7 +149,7 @@ def demo_stock_analysis_with_tools():
         
         # 创建DeepSeek适配器
         adapter = create_deepseek_direct_adapter(
-            model="deepseek-chat",
+            model="deepseek-v4-flash",
             temperature=0.1,
             max_tokens=1000
         )

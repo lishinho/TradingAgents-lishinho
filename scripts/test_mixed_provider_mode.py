@@ -30,7 +30,7 @@ test_cases = [
     },
     {
         "name": "DeepSeek + 阿里百炼",
-        "quick_model": "deepseek-chat",
+        "quick_model": "deepseek-v4-flash",
         "deep_model": "qwen-max",
         "expected_quick_provider": "deepseek",
         "expected_deep_provider": "dashscope"

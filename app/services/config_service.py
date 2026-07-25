@@ -2580,19 +2580,19 @@ class ConfigService:
                 "provider_name": "DeepSeek",
                 "models": [
                     {
-                        "name": "deepseek-chat",
-                        "display_name": "DeepSeek Chat - 通用对话",
+                        "name": "deepseek-v4-flash",
+                        "display_name": "DeepSeek V4 Flash - 快速响应",
                         "input_price_per_1k": 0.0001,
                         "output_price_per_1k": 0.0002,
                         "context_length": 32768,
                         "currency": "CNY"
                     },
                     {
-                        "name": "deepseek-coder",
-                        "display_name": "DeepSeek Coder - 代码专用",
+                        "name": "deepseek-v4-pro",
+                        "display_name": "DeepSeek V4 Pro - 高性能",
                         "input_price_per_1k": 0.0001,
                         "output_price_per_1k": 0.0002,
-                        "context_length": 16384,
+                        "context_length": 32768,
                         "currency": "CNY"
                     }
                 ]
@@ -3612,7 +3612,7 @@ class ConfigService:
 
             # 如果没有指定模型，使用默认模型
             if not model_name:
-                model_name = "deepseek-chat"
+                model_name = "deepseek-v4-flash"
                 logger.info(f"⚠️ 未指定模型，使用默认模型: {model_name}")
 
             logger.info(f"🔍 [DeepSeek 测试] 使用模型: {model_name}")

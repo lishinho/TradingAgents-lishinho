@@ -19,7 +19,7 @@ def test_provider_lookup():
         "gemini-2.5-pro",
         "qwen-plus",
         "gpt-4o",
-        "deepseek-chat",
+        "deepseek-v4-flash",
         "unknown-model"  # 测试未知模型
     ]
 

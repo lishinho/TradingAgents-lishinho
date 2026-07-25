@@ -53,14 +53,13 @@ MODEL_OPTIONS: ProviderModeOptions = {
     },
     "deepseek": {
         "quick": [
-            ("DeepSeek Chat (v4-flash, 即将废弃)", "deepseek-chat"),
-            ("DeepSeek V4 Pro", "deepseek-v4-pro"),
+            ("DeepSeek V4 Flash - 快速响应", "deepseek-v4-flash"),
+            ("DeepSeek V4 Pro - 高性能", "deepseek-v4-pro"),
             ("Custom model ID", "custom"),
         ],
         "deep": [
-            ("DeepSeek Chat (v4-flash, 即将废弃)", "deepseek-chat"),
-            ("DeepSeek Reasoner (v4-flash思考, 即将废弃)", "deepseek-reasoner"),
-            ("DeepSeek V4 Pro", "deepseek-v4-pro"),
+            ("DeepSeek V4 Pro - 高性能", "deepseek-v4-pro"),
+            ("DeepSeek V4 Flash - 快速响应", "deepseek-v4-flash"),
             ("Custom model ID", "custom"),
         ],
     },

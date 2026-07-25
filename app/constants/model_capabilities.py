@@ -185,13 +185,21 @@ DEFAULT_MODEL_CAPABILITIES: Dict[str, Dict[str, Any]] = {
     },
     
     # ==================== DeepSeek ====================
-    "deepseek-chat": {
+    "deepseek-v4-flash": {
         "capability_level": 3,
         "suitable_roles": [ModelRole.BOTH],
         "features": [ModelFeature.TOOL_CALLING, ModelFeature.LONG_CONTEXT, ModelFeature.COST_EFFECTIVE],
         "recommended_depths": ["基础", "标准", "深度"],
-        "performance_metrics": {"speed": 4, "cost": 5, "quality": 4},
-        "description": "DeepSeek Chat，性价比高"
+        "performance_metrics": {"speed": 5, "cost": 5, "quality": 4},
+        "description": "DeepSeek V4 Flash，快速响应"
+    },
+    "deepseek-v4-pro": {
+        "capability_level": 4,
+        "suitable_roles": [ModelRole.DEEP],
+        "features": [ModelFeature.TOOL_CALLING, ModelFeature.LONG_CONTEXT, ModelFeature.COST_EFFECTIVE],
+        "recommended_depths": ["标准", "深度"],
+        "performance_metrics": {"speed": 3, "cost": 4, "quality": 5},
+        "description": "DeepSeek V4 Pro，高性能"
     },
     
     # ==================== 百度文心 (Qianfan) ====================

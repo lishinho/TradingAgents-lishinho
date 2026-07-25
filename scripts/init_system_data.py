@@ -177,9 +177,9 @@ async def create_model_config(db):
     models = [
         {
             "provider": "deepseek",
-            "model_name": "deepseek-chat",
-            "display_name": "DeepSeek Chat",
-            "description": "DeepSeek通用对话模型",
+            "model_name": "deepseek-v4-flash",
+            "display_name": "DeepSeek V4 Flash",
+            "description": "DeepSeek V4 快速响应模型",
             "enabled": True,
             "priority": 1,
             "capabilities": ["chat", "analysis", "reasoning"],

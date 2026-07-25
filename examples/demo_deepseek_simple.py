@@ -26,7 +26,7 @@ class SimpleDeepSeekAdapter:
     def chat(self, message: str) -> str:
         """简单聊天"""
         response = self.client.chat.completions.create(
-            model="deepseek-chat",
+            model="deepseek-v4-flash",
             messages=[{"role": "user", "content": message}],
             temperature=0.1,
             max_tokens=1000

@@ -385,23 +385,25 @@ class OptimizedChinaDataProvider:
             logger.debug(f"🔍 [股票代码追踪] 读取market_quotes失败（忽略）: {_qe}")
 
         # 然后从股票数据中提取价格信息
-        if "股票名称:" in stock_data:
-            lines = stock_data.split('\n')
-            for line in lines:
-                if "股票名称:" in line and company_name == "未知公司":
-                    company_name = line.split(':')[1].strip()
-                elif "当前价格:" in line:
-                    current_price = line.split(':')[1].strip()
-                elif "最新价格:" in line or "💰 最新价格:" in line:
-                    # 兼容另一种模板输出
-                    try:
-                        current_price = line.split(':', 1)[1].strip().lstrip('¥').strip()
-                    except Exception:
-                        current_price = line.split(':')[-1].strip()
-                elif "涨跌幅:" in line:
-                    change_pct = line.split(':')[1].strip()
-                elif "成交量:" in line:
-                    volume = line.split(':')[1].strip()
+        # 注意：不再使用 "股票名称:" in stock_data 作为守卫条件，
+        # 因为 get_china_stock_data_unified 返回的价格数据格式中不包含 "股票名称:" 字段，
+        # 导致 current_price 始终为 "N/A"，进而触发 BaoStock 兜底失败时数据全部缺失
+        lines = stock_data.split('\n')
+        for line in lines:
+            if "股票名称:" in line and company_name == "未知公司":
+                company_name = line.split(':')[1].strip()
+            elif "当前价格:" in line:
+                current_price = line.split(':')[1].strip()
+            elif "最新价格:" in line or "💰 最新价格:" in line:
+                # 兼容另一种模板输出
+                try:
+                    current_price = line.split(':', 1)[1].strip().lstrip('¥').strip()
+                except Exception:
+                    current_price = line.split(':')[-1].strip()
+            elif "涨跌幅:" in line:
+                change_pct = line.split(':')[1].strip()
+            elif "成交量:" in line:
+                volume = line.split(':')[1].strip()
 
         # 尝试从股票数据表格中提取最新价格信息
         if current_price == "N/A" and stock_data:
